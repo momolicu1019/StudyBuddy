@@ -1,5 +1,6 @@
 import type { Flashcard, Subject, TutorReply } from '../api/types';
-import { getAiConfig, isAiConfigured } from './aiConfig';
+import { isAiConfigured } from './aiConfig';
+import { generateAiText } from './geminiClient';
 
 export type TutorMessage = {
   role: 'user' | 'assistant';
@@ -146,8 +147,7 @@ function gatherRelevantNotes(ctx: TutorContext): {
 }
 
 async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
-  const { apiKey, baseUrl, model } = getAiConfig();
-  if (!apiKey) return null;
+  if (!isAiConfigured()) return null;
 
   const { topic, notes } = gatherRelevantNotes(ctx);
   const notesBlock =
@@ -155,18 +155,16 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
       ? notes
           .map(
             (n, i) =>
-              `${i + 1}. [${n.subject}] Q: ${n.question}\n   A: ${n.answer}`,
+              `${i + 1}. [${n.subject}] Key point: ${n.question}\n   Summary: ${n.answer}`,
           )
           .join('\n')
       : 'No matching flashcards were found on device.';
 
   const history = (ctx.history ?? [])
     .filter((m) => m.text.trim())
-    .slice(-8)
-    .map((m) => ({
-      role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
-      content: m.text,
-    }));
+    .slice(-6)
+    .map((m) => `${m.role === 'assistant' ? 'Tutor' : 'Student'}: ${m.text}`)
+    .join('\n');
 
   const system = [
     'You are Study Buddy AI Tutor, a friendly and accurate study coach.',
@@ -178,38 +176,20 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
     `Current subject focus: ${topic}.`,
   ].join(' ');
 
-  const userContent =
-    `Student question:\n${ctx.message}\n\n` +
-    `Relevant notes from the student's flashcards:\n${notesBlock}`;
+  const userContent = [
+    history ? `Recent chat:\n${history}\n` : '',
+    `Student question:\n${ctx.message}`,
+    '',
+    `Relevant notes from the student's flashcards:\n${notesBlock}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.4,
-      messages: [
-        { role: 'system', content: system },
-        ...history,
-        { role: 'user', content: userContent },
-      ],
-    }),
+  const reply = await generateAiText({
+    system,
+    user: userContent,
+    temperature: 0.4,
   });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(
-      `AI tutor request failed (${response.status})${detail ? `: ${detail.slice(0, 180)}` : ''}`,
-    );
-  }
-
-  const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const reply = data.choices?.[0]?.message?.content?.trim();
   return reply || null;
 }
 
@@ -268,14 +248,13 @@ function answerFromNotes(ctx: TutorContext): string {
       : '';
 
   return (
-    `I can answer this better once AI tutoring is configured, or when your Flashcards include this topic.\n\n` +
+    `I couldn't find matching flashcards for that yet.\n\n` +
     `You asked: “${question}”\n\n` +
     `${termLine}\n` +
-    'Right now I don’t have matching notes for that on this device.\n\n' +
-    'To get full answers:\n' +
-    '1) Add an AI key in mobile/.env (EXPO_PUBLIC_AI_API_KEY), or\n' +
-    '2) Generate flashcards from your PDF/photo for this topic, then ask again.\n\n' +
-    'Tip: ask something that appears in your saved flashcards and I can explain it from those notes immediately.'
+    (isAiConfigured()
+      ? 'Your Gemini key is loaded, but this reply fell back to offline mode. Try again in a moment.'
+      : 'Restart Expo with a clean cache so your Gemini key in mobile/.env is picked up (`npx expo start -c`).') +
+    '\n\nTip: generate flashcards from your notes first, then ask about those topics.'
   );
 }
 
@@ -300,11 +279,6 @@ export async function answerTutorQuestion(
     const detail = error instanceof Error ? error.message : 'AI request failed';
     // Fall through to local notes, but surface the issue briefly when notes are thin.
     const local = answerFromNotes({ ...ctx, message: text });
-    if (local.includes('AI tutoring is configured')) {
-      return {
-        reply: `${local}\n\n(AI provider error: ${detail})`,
-      };
-    }
     return {
       reply: `${local}\n\n(Cloud AI unavailable: ${detail})`,
     };

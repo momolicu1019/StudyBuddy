@@ -34,7 +34,8 @@ export type GenerateDraftResponse = {
   filename: string;
   source_type: string;
   warning?: string;
-  extraction_method?: 'pdf-text' | 'ocr' | 'empty';
+  extraction_method?: 'pdf-text' | 'ocr' | 'empty' | 'gemini';
+  overview?: string;
 };
 
 export type SaveFlashcardsResponse = {

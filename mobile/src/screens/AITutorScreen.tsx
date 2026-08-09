@@ -88,8 +88,8 @@ export function AITutorScreen({ route }: Props) {
           Ask questions and get direct answers
           {subject ? ` for ${subject}` : ''}.
           {!cloudReady
-            ? ' Tip: add EXPO_PUBLIC_AI_API_KEY in mobile/.env for full AI answers on any topic.'
-            : ''}
+            ? ' Tip: restart Expo with `npx expo start -c` so your Gemini key from mobile/.env loads.'
+            : ' Gemini is connected.'}
         </Text>
 
         <View style={styles.chat}>

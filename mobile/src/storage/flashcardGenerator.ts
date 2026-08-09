@@ -1,9 +1,13 @@
+import * as FileSystem from 'expo-file-system/legacy';
+
 import type { DraftFlashcard } from '../api/types';
-import { getAiConfig, isAiConfigured } from './aiConfig';
+import { isAiConfigured } from './aiConfig';
+import { generateAiText, generateWithGemini } from './geminiClient';
 
 const MAX_CARDS = 16;
 const MIN_CARDS = 4;
 const MAX_SOURCE_CHARS = 14000;
+const MAX_INLINE_CHARS = 12_000_000; // ~9MB base64 budget guard
 
 function cleanText(raw: string): string {
   return raw
@@ -27,7 +31,6 @@ function toReviewCard(title: string, summary: string): DraftFlashcard | null {
   const front = title.trim().replace(/\?+$/g, '').trim();
   const back = summary.trim();
   if (front.length < 2 || back.length < 12) return null;
-  // Keep storage fields, but content is key-point + summary (not Q&A).
   return { question: front, answer: back };
 }
 
@@ -43,7 +46,7 @@ function uniqueCards(cards: DraftFlashcard[]): DraftFlashcard[] {
   return out;
 }
 
-function parseGeminiCards(raw: string): DraftFlashcard[] {
+export function parseGeminiCards(raw: string): DraftFlashcard[] {
   const trimmed = raw.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const jsonText = (fenced?.[1] ?? trimmed).trim();
@@ -91,66 +94,113 @@ function parseGeminiCards(raw: string): DraftFlashcard[] {
   return uniqueCards(cards);
 }
 
-async function buildFlashcardsWithGemini(
+const FLASHCARD_INSTRUCTIONS = [
+  'You are Study Buddy, an expert study coach.',
+  'Analyze the uploaded study material and create revision flashcards that highlight key points.',
+  'Do NOT write quiz questions. Do NOT start titles with What/Why/How.',
+  'Each card is a reviewer note: a short key-point title + a clear summary.',
+  'Return ONLY valid JSON as an array of objects with keys "title" and "summary".',
+  'Create 8 to 16 cards depending on how rich the material is.',
+  'Summaries should be 1 to 3 concise sentences, accurate to the source.',
+  'Prefer definitions, processes, formulas, comparisons, and must-know facts.',
+].join(' ');
+
+function guessMime(sourceType: 'pdf' | 'photo', filename?: string, uri?: string): string {
+  const name = `${filename ?? ''} ${uri ?? ''}`.toLowerCase();
+  if (sourceType === 'pdf') return 'application/pdf';
+  if (name.includes('.png')) return 'image/png';
+  if (name.includes('.webp')) return 'image/webp';
+  if (name.includes('.heic')) return 'image/jpeg';
+  return 'image/jpeg';
+}
+
+/**
+ * Ask Gemini to read the PDF/photo directly (multimodal) and return review cards.
+ */
+export async function buildFlashcardsFromFile(input: {
+  uri: string;
+  sourceType: 'pdf' | 'photo';
+  filename?: string;
+}): Promise<{ cards: DraftFlashcard[]; usedAi: boolean; aiError?: string }> {
+  if (!isAiConfigured()) {
+    return { cards: [], usedAi: false, aiError: 'AI API key is not configured' };
+  }
+
+  try {
+    const base64 = await FileSystem.readAsStringAsync(input.uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    if (!base64 || base64.length < 32) {
+      return { cards: [], usedAi: false, aiError: 'Could not read the uploaded file' };
+    }
+    if (base64.length > MAX_INLINE_CHARS) {
+      return {
+        cards: [],
+        usedAi: false,
+        aiError: 'File is too large for on-device AI upload. Try a smaller PDF or photo.',
+      };
+    }
+
+    const mimeType = guessMime(input.sourceType, input.filename, input.uri);
+    const prompt = [
+      FLASHCARD_INSTRUCTIONS,
+      '',
+      `Source type: ${input.sourceType === 'pdf' ? 'PDF document' : 'photo of notes'}.`,
+      input.filename ? `Filename: ${input.filename}` : '',
+      'Read the attached file carefully and produce the JSON flashcards now.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const content = await generateWithGemini(
+      [
+        { text: prompt },
+        { inlineData: { mimeType, data: base64 } },
+      ],
+      { temperature: 0.25, json: true },
+    );
+
+    const cards = parseGeminiCards(content);
+    if (!cards.length) {
+      return {
+        cards: [],
+        usedAi: true,
+        aiError: 'Gemini returned no usable flashcards from this file',
+      };
+    }
+    return { cards: cards.slice(0, MAX_CARDS), usedAi: true };
+  } catch (error) {
+    return {
+      cards: [],
+      usedAi: false,
+      aiError: error instanceof Error ? error.message : 'AI file analysis failed',
+    };
+  }
+}
+
+async function buildFlashcardsWithAiText(
   text: string,
   options?: { filename?: string; sourceType?: 'pdf' | 'photo' },
 ): Promise<DraftFlashcard[] | null> {
   if (!isAiConfigured()) return null;
 
-  const { apiKey, baseUrl, model } = getAiConfig();
   const sourceLabel =
     options?.sourceType === 'photo' ? 'photo notes' : 'PDF notes';
   const fileHint = options?.filename ? ` (file: ${options.filename})` : '';
 
-  const system = [
-    'You are Study Buddy, an expert study coach.',
-    'Convert student notes into revision flashcards that highlight key points.',
-    'Do NOT write quiz questions. Do NOT start titles with What/Why/How.',
-    'Each card is a reviewer note: a short key-point title + a clear summary.',
-    'Return ONLY valid JSON (no markdown) as an array of objects with keys "title" and "summary".',
-    'Create 8 to 16 cards depending on how rich the notes are.',
-    'Summaries should be 1 to 3 concise sentences, accurate to the source.',
-    'Prefer definitions, processes, formulas, comparisons, and must-know facts.',
-  ].join(' ');
-
-  const user = [
-    `Analyze these ${sourceLabel}${fileHint} and turn them into key-point review flashcards.`,
-    '',
-    'NOTES:',
-    text.slice(0, MAX_SOURCE_CHARS),
-  ].join('\n');
-
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.3,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-    }),
+  const content = await generateAiText({
+    system: FLASHCARD_INSTRUCTIONS,
+    user: [
+      `Analyze these ${sourceLabel}${fileHint} and turn them into key-point review flashcards.`,
+      '',
+      'NOTES:',
+      text.slice(0, MAX_SOURCE_CHARS),
+    ].join('\n'),
+    temperature: 0.3,
   });
 
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(
-      `Gemini flashcard request failed (${response.status})${
-        detail ? `: ${detail.slice(0, 160)}` : ''
-      }`,
-    );
-  }
-
-  const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const content = data.choices?.[0]?.message?.content?.trim() ?? '';
   const cards = parseGeminiCards(content);
-  return cards.length >= MIN_CARDS ? cards : cards.length ? cards : null;
+  return cards.length ? cards : null;
 }
 
 /**
@@ -167,7 +217,7 @@ export function buildReviewFlashcardsLocally(
       {
         question: `Notes from ${label}`,
         answer:
-          'Not enough readable text was extracted. Try a clearer photo or a text-based PDF, then generate again.',
+          'Not enough readable content yet. Check your Gemini API key, restart Expo, and try generating again.',
       },
     ];
   }
@@ -222,7 +272,6 @@ export function buildReviewFlashcardsLocally(
 
 /**
  * Build reviewer flashcards from extracted note text.
- * Uses Gemini when configured; falls back to local key-point extraction.
  */
 export async function buildFlashcardsFromText(
   rawText: string,
@@ -237,7 +286,7 @@ export async function buildFlashcardsFromText(
   }
 
   try {
-    const aiCards = await buildFlashcardsWithGemini(text, options);
+    const aiCards = await buildFlashcardsWithAiText(text, options);
     if (aiCards?.length) {
       return { cards: aiCards.slice(0, MAX_CARDS), usedAi: true };
     }

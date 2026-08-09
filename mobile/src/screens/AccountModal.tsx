@@ -77,7 +77,18 @@ export function AccountModal({ visible, onClose }: Props) {
       {!isSignedIn ? (
         <PrimaryButton
           label={busy ? 'Signing in…' : 'Continue with Google'}
-          onPress={() => void run(signInWithGoogle)}
+          onPress={() =>
+            void run(() =>
+              signInWithGoogle(
+                googleConfigured
+                  ? undefined
+                  : {
+                      name: session?.user.name || 'Study Buddy Student',
+                      email: session?.user.email || 'student@gmail.com',
+                    },
+              ),
+            )
+          }
           style={{ marginTop: 16 }}
         />
       ) : (

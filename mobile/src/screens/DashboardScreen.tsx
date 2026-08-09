@@ -21,11 +21,18 @@ import {
   PrimaryButton,
   SearchInput,
 } from '../components/ui';
+import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
 import { colors } from '../theme/colors';
 
 const FOLDER_ICONS = ['📚', '🧬', '🔬', '➗', '🌎', '📖', '💻', '🎨'];
+
+function firstNameFrom(fullName?: string | null): string {
+  const name = fullName?.trim();
+  if (!name) return 'Student';
+  return name.split(/\s+/)[0];
+}
 
 type SelectedSource = {
   name: string;
@@ -35,6 +42,7 @@ type SelectedSource = {
 
 export function DashboardScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { session } = useAuth();
   const {
     subjects,
     stats,
@@ -43,6 +51,8 @@ export function DashboardScreen() {
     generateFromSource,
     saveDraftFlashcards,
   } = useApp();
+
+  const greetName = firstNameFrom(session?.user.name);
 
   const [selectedSource, setSelectedSource] = useState<SelectedSource | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -122,11 +132,7 @@ export function DashboardScreen() {
     }
     if (generating) return;
     setGenerating(true);
-    showToast(
-      selectedSource.type === 'photo'
-        ? 'Reading text from your photo…'
-        : 'Analyzing PDF content…',
-    );
+    showToast('Sending to Gemini for analysis…');
     try {
       const result = await generateFromSource(
         selectedSource.type,
@@ -136,13 +142,11 @@ export function DashboardScreen() {
       setDraft(result);
       setSaveFolderId(subjects[0]?.id ?? null);
       setSelectedSource(null);
-      if (result.warning) {
-        showToast(result.warning);
-      } else {
-        showToast(`${result.count} flashcards ready to save`);
-      }
-    } catch {
-      showToast('Could not generate flashcards. Please try again.');
+      showToast(`${result.count} flashcards ready to save`);
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Could not generate flashcards.';
+      showToast(detail);
     } finally {
       setGenerating(false);
     }
@@ -203,7 +207,7 @@ export function DashboardScreen() {
       >
         <View style={styles.hero}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.h1}>Hi, Student! 👋</Text>
+            <Text style={styles.h1}>Hi, {greetName}! 👋</Text>
             <Text style={styles.sub}>What would you like to study today?</Text>
           </View>
           <PrimaryButton
@@ -217,8 +221,8 @@ export function DashboardScreen() {
           <IconBubble size={58}>📚</IconBubble>
           <Text style={styles.uploadTitle}>Create flashcards from your notes</Text>
           <Text style={styles.subCenter}>
-            Upload a PDF or take a photo. Gemini analyzes the content and builds
-            key-point review flashcards you can save to a subject.
+            1) Upload PDF/photo · 2) Gemini analyzes it · 3) Summary becomes review
+            flashcards
           </Text>
           <View style={styles.row}>
             <PrimaryButton label="📄 Upload PDF" onPress={pickPdf} style={styles.flexBtn} />
@@ -235,21 +239,13 @@ export function DashboardScreen() {
               <Text style={styles.sourceName}>{selectedSource.name}</Text>
               <Text style={styles.sub}>
                 {generating
-                  ? selectedSource.type === 'photo'
-                    ? 'Reading the photo, then Gemini turns key points into review cards…'
-                    : 'Extracting PDF text, then Gemini turns key points into review cards…'
+                  ? 'Submitting to Gemini… then converting the summary into flashcards.'
                   : selectedSource.type === 'photo'
-                    ? '📷 Photo selected. Generate key-point review flashcards from this image.'
-                    : '📄 PDF selected. Generate key-point review flashcards from this document.'}
+                    ? '📷 Photo ready. Tap generate to submit it to Gemini.'
+                    : '📄 PDF ready. Tap generate to submit it to Gemini.'}
               </Text>
               <PrimaryButton
-                label={
-                  generating
-                    ? selectedSource.type === 'photo'
-                      ? '✨ Reading photo…'
-                      : '✨ Analyzing PDF…'
-                    : '✨ Generate Flashcards'
-                }
+                label={generating ? '✨ Gemini is analyzing…' : '✨ Generate Flashcards'}
                 onPress={onGenerate}
                 style={{ marginTop: 12, opacity: generating ? 0.7 : 1 }}
               />
@@ -359,13 +355,13 @@ export function DashboardScreen() {
         ) : null}
         <View style={styles.sample}>
           <Text style={{ fontWeight: '700', color: colors.ink }}>
-            Sample key point · {draft?.count ?? 0} review cards ready
-            {draft?.extraction_method === 'ocr'
-              ? ' · from photo text'
-              : draft?.extraction_method === 'pdf-text'
-                ? ' · from PDF text'
-                : ''}
+            Sample key point · {draft?.count ?? 0} cards from Gemini
           </Text>
+          {draft?.overview ? (
+            <Text style={[styles.sub, { marginTop: 8 }]}>
+              Analysis overview: {draft.overview}
+            </Text>
+          ) : null}
           <Text style={{ marginTop: 10, fontWeight: '700' }}>
             {draft?.sample_question}
           </Text>

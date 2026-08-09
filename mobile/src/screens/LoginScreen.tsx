@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AppModal, PrimaryButton } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { colors } from '../theme/colors';
 
@@ -54,6 +55,9 @@ export function LoginScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [googleModal, setGoogleModal] = useState(false);
+  const [googleName, setGoogleName] = useState('');
+  const [googleEmail, setGoogleEmail] = useState('');
 
   const googleLabel = useMemo(
     () => (mode === 'signin' ? 'Continue with Google' : 'Sign up with Google'),
@@ -124,21 +128,47 @@ export function LoginScreen() {
   }
 
   async function onGoogle() {
+    setError(null);
+    setMessage(null);
+    if (!googleConfigured) {
+      setGoogleName(fullName.trim() || googleName);
+      setGoogleEmail(signupEmail.trim() || loginEmail.trim() || googleEmail);
+      setGoogleModal(true);
+      return;
+    }
+    await completeGoogleSignIn();
+  }
+
+  async function completeGoogleSignIn(profile?: { name?: string; email?: string }) {
     setBusy(true);
     setMessage(null);
     setError(null);
     try {
-      const result = await signInWithGoogle();
+      const result = await signInWithGoogle(profile);
       if (!result.ok) {
         setError(result.message);
         return;
       }
-      // Session is set — navigator leaves this screen.
+      setGoogleModal(false);
     } catch {
       setError('Could not sign in with Google. Please try again.');
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onConfirmGoogleDemo() {
+    const name = googleName.trim();
+    const email = googleEmail.trim().toLowerCase();
+    if (!name) {
+      setError('Please enter your name for Google sign-in.');
+      return;
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError('Please enter a valid Google email.');
+      return;
+    }
+    await completeGoogleSignIn({ name, email });
   }
 
   return (
@@ -315,11 +345,15 @@ export function LoginScreen() {
                   </View>
 
                   <Divider />
-                  <GoogleButton label={googleLabel} busy={busy} onPress={onGoogle} />
+                  <GoogleButton
+                    label={googleLabel}
+                    busy={busy}
+                    onPress={() => void onGoogle()}
+                  />
                   {!googleConfigured ? (
                     <Text style={styles.hint}>
-                      Google backup runs in demo mode on this device until you add
-                      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID.
+                      Continues with a Google-style session on this device. Add
+                      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for full Google OAuth + Drive backup.
                     </Text>
                   ) : null}
 
@@ -429,10 +463,15 @@ export function LoginScreen() {
                   </View>
 
                   <Divider />
-                  <GoogleButton label={googleLabel} busy={busy} onPress={onGoogle} />
+                  <GoogleButton
+                    label={googleLabel}
+                    busy={busy}
+                    onPress={() => void onGoogle()}
+                  />
                   {!googleConfigured ? (
                     <Text style={styles.hint}>
-                      Google sign-up uses a demo Google session until OAuth is configured.
+                      Continues with a Google-style session on this device. Add
+                      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for full Google OAuth + Drive backup.
                     </Text>
                   ) : null}
 
@@ -458,6 +497,47 @@ export function LoginScreen() {
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
+
+      <AppModal visible={googleModal} onClose={() => setGoogleModal(false)}>
+        <Text style={styles.h2}>Continue with Google</Text>
+        <Text style={[styles.subtitle, { marginTop: 8 }]}>
+          Enter the name and email you want on your Study Buddy profile.
+        </Text>
+        <Field label="Full name">
+          <TextInput
+            value={googleName}
+            onChangeText={setGoogleName}
+            placeholder="e.g. Nino"
+            placeholderTextColor={colors.muted}
+            style={styles.input}
+          />
+        </Field>
+        <Field label="Google email">
+          <TextInput
+            value={googleEmail}
+            onChangeText={setGoogleEmail}
+            placeholder="you@gmail.com"
+            placeholderTextColor={colors.muted}
+            autoCapitalize="none"
+            keyboardType="email-address"
+            style={styles.input}
+          />
+        </Field>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+          <PrimaryButton
+            label="Cancel"
+            variant="secondary"
+            onPress={() => setGoogleModal(false)}
+            style={{ flex: 1 }}
+          />
+          <PrimaryButton
+            label={busy ? 'Signing in…' : 'Continue'}
+            onPress={() => void onConfirmGoogleDemo()}
+            style={{ flex: 1, opacity: busy ? 0.7 : 1 }}
+          />
+        </View>
+      </AppModal>
     </SafeAreaView>
   );
 }

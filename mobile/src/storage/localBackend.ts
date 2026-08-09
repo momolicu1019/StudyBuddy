@@ -20,10 +20,9 @@ import type {
   Subject,
   TutorReply,
 } from '../api/types';
-import { extractTextFromSource } from './contentExtract';
-import { buildFlashcardsFromText } from './flashcardGenerator';
 import { persistSourceFile } from './pdfs';
 import { loadLocalDb, updateLocalDb } from './store';
+import { generateFlashcardsViaGeminiPipeline } from './studyPipeline';
 
 function recountMastered(cards: Flashcard[]): number {
   return cards.filter((c) => c.mastered).length;
@@ -106,7 +105,7 @@ export const localBackend = {
   ): Promise<GenerateDraftResponse> {
     if (!uri) {
       throw new Error(
-        'A file URI is required to analyze PDF or photo content for flashcards.',
+        'A file URI is required so Gemini can analyze your PDF or photo.',
       );
     }
 
@@ -116,44 +115,31 @@ export const localBackend = {
       // Generation still works even if the file copy fails (e.g. web).
     }
 
-    const extracted = await extractTextFromSource({ sourceType, uri });
-    const generated = await buildFlashcardsFromText(extracted.text, {
-      filename,
+    // Flow: upload → Gemini analysis → translate summary into flashcards
+    const result = await generateFlashcardsViaGeminiPipeline({
+      uri,
       sourceType,
+      filename,
     });
-    const cards = generated.cards;
-    const sample = cards[0] ?? {
-      question: 'No review cards were generated',
-      answer: extracted.warning ?? 'Try another PDF or a clearer photo.',
-    };
 
-    const methodLabel =
-      extracted.method === 'pdf-text'
-        ? 'PDF text'
-        : extracted.method === 'ocr'
-          ? 'photo OCR'
-          : 'limited text';
-
-    const aiLabel = generated.usedAi
-      ? 'Gemini reviewed the content into key-point flashcards'
-      : 'key-point flashcards (local fallback)';
-
-    let message = `${cards.length} review flashcards from "${filename}" (${methodLabel} → ${aiLabel}). Choose a subject to save them.`;
-    if (extracted.warning) message += ` ${extracted.warning}`;
-    if (generated.aiError && !generated.usedAi) {
-      message += ` AI note: ${generated.aiError}`;
-    }
+    const sample = result.cards[0];
+    const overviewBit = result.overview
+      ? ` Overview: ${result.overview.slice(0, 160)}${result.overview.length > 160 ? '…' : ''}`
+      : '';
 
     return {
-      count: cards.length,
-      cards,
+      count: result.cards.length,
+      cards: result.cards,
       sample_question: sample.question,
       sample_answer: sample.answer,
-      message,
+      message:
+        `${result.cards.length} review flashcards were created from Gemini’s analysis of "${filename}".` +
+        overviewBit +
+        ' Choose a subject to save them.',
       filename,
       source_type: sourceType,
-      warning: extracted.warning,
-      extraction_method: extracted.method,
+      extraction_method: 'gemini',
+      overview: result.overview,
     };
   },
 

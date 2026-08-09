@@ -162,16 +162,60 @@ export async function clearAuthState(): Promise<void> {
   await AsyncStorage.removeItem(AUTH_KEY);
 }
 
-function googleClientId(): string | undefined {
-  return process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim() || undefined;
+type GoogleExtra = {
+  googleWebClientId?: string;
+  googleIosClientId?: string;
+  googleAndroidClientId?: string;
+};
+
+function readGoogleExtra(): GoogleExtra {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Constants = require('expo-constants').default as {
+      expoConfig?: { extra?: GoogleExtra };
+    };
+    return Constants.expoConfig?.extra ?? {};
+  } catch {
+    return {};
+  }
+}
+
+export type GoogleOAuthConfig = {
+  webClientId: string;
+  iosClientId: string;
+  androidClientId: string;
+};
+
+export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
+  const extra = readGoogleExtra();
+  const webClientId = (
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+    extra.googleWebClientId ||
+    ''
+  ).trim();
+  if (!webClientId) return null;
+
+  const iosClientId = (
+    process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ||
+    extra.googleIosClientId ||
+    webClientId
+  ).trim();
+
+  const androidClientId = (
+    process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
+    extra.googleAndroidClientId ||
+    webClientId
+  ).trim();
+
+  return { webClientId, iosClientId, androidClientId };
 }
 
 export function isGoogleOAuthConfigured(): boolean {
-  return Boolean(googleClientId());
+  return Boolean(getGoogleOAuthConfig()?.webClientId);
 }
 
 export function getGoogleWebClientId(): string | undefined {
-  return googleClientId();
+  return getGoogleOAuthConfig()?.webClientId;
 }
 
 /**

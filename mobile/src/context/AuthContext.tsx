@@ -8,12 +8,13 @@ import React, {
 } from 'react';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
+import { makeRedirectUri } from 'expo-auth-session';
 
 import {
   backupLocalData,
   clearAuthState,
   createLocalAccount,
-  getGoogleWebClientId,
+  getGoogleOAuthConfig,
   isGoogleOAuthConfigured,
   loadAuthState,
   restoreLocalData,
@@ -32,7 +33,10 @@ type AuthContextValue = {
   skippedLogin: boolean;
   isSignedIn: boolean;
   googleConfigured: boolean;
-  signInWithGoogle: () => Promise<CloudActionResult>;
+  signInWithGoogle: (profile?: {
+    name?: string;
+    email?: string;
+  }) => Promise<CloudActionResult>;
   signInWithEmail: (email: string, password: string) => Promise<CloudActionResult>;
   createAccount: (
     name: string,
@@ -169,16 +173,21 @@ function useAuthSession() {
     [finishSignIn],
   );
 
-  const signInWithDemoGoogle = useCallback(async () => {
-    const user: AuthUser = {
-      id: 'demo-google-user',
-      email: 'student@gmail.com',
-      name: 'Study Buddy Student',
-      provider: 'google',
-      isDemo: true,
-    };
-    return finishSignIn(user, { autoBackup: true });
-  }, [finishSignIn]);
+  const signInWithDemoGoogle = useCallback(
+    async (profile?: { name?: string; email?: string }) => {
+      const name = profile?.name?.trim() || 'Study Buddy Student';
+      const email = (profile?.email?.trim() || 'student@gmail.com').toLowerCase();
+      const user: AuthUser = {
+        id: `google-demo-${email}`,
+        email,
+        name,
+        provider: 'google',
+        isDemo: true,
+      };
+      return finishSignIn(user, { autoBackup: true });
+    },
+    [finishSignIn],
+  );
 
   const skipLogin = useCallback(async () => {
     await persist({ session: null, skippedLogin: true });
@@ -281,18 +290,23 @@ function LocalAuthProvider({ children }: { children: React.ReactNode }) {
 /** Real Google OAuth when EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID is set. */
 function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
   const auth = useAuthSession();
-  const webClientId = getGoogleWebClientId()!;
+  const oauth = getGoogleOAuthConfig()!;
+  const redirectUri = makeRedirectUri({
+    scheme: 'studybuddy',
+    path: 'oauth',
+  });
 
   const [request, , promptAsync] = Google.useAuthRequest({
-    webClientId,
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || webClientId,
-    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || webClientId,
+    webClientId: oauth.webClientId,
+    iosClientId: oauth.iosClientId,
+    androidClientId: oauth.androidClientId,
     scopes: [
       'openid',
       'profile',
       'email',
       'https://www.googleapis.com/auth/drive.appdata',
     ],
+    redirectUri,
   });
 
   const signInWithGoogle = useCallback(async () => {
@@ -304,14 +318,26 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      const result = await promptAsync();
-      if (result.type !== 'success') {
+      const result = await promptAsync({ showInRecents: true });
+      if (result.type === 'dismiss' || result.type === 'cancel') {
         return { ok: false, message: 'Google sign-in was cancelled.' };
       }
+      if (result.type !== 'success') {
+        return {
+          ok: false,
+          message: 'Google sign-in failed. Check your OAuth client IDs and try again.',
+        };
+      }
 
-      const accessToken = result.authentication?.accessToken;
+      const accessToken =
+        result.authentication?.accessToken ||
+        (result as { params?: { access_token?: string } }).params?.access_token;
       if (!accessToken) {
-        return { ok: false, message: 'Google did not return an access token.' };
+        return {
+          ok: false,
+          message:
+            'Google did not return an access token. Use a Web client ID and enable the Google Drive API.',
+        };
       }
 
       const profileRes = await fetch('https://www.googleapis.com/userinfo/v2/me', {
@@ -331,7 +357,7 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
       return auth.finishSignIn({
         id: profile.id,
         email: profile.email,
-        name: profile.name || profile.email,
+        name: profile.name || profile.email.split('@')[0] || 'Student',
         photoUrl: profile.picture,
         accessToken,
         provider: 'google',

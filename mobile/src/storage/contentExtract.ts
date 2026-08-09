@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { extractTextFromPdfBytes } from './pdfText';
+import type { SourceKind } from './sourceMime';
 
 export type ExtractedContent = {
   text: string;
@@ -69,10 +70,30 @@ async function extractImageText(uri: string): Promise<string> {
 }
 
 export async function extractTextFromSource(input: {
-  sourceType: 'pdf' | 'photo';
+  sourceType: SourceKind;
   uri: string;
 }): Promise<ExtractedContent> {
   try {
+    if (
+      input.sourceType === 'txt' ||
+      input.sourceType === 'csv' ||
+      input.sourceType === 'rtf'
+    ) {
+      const text = (
+        await FileSystem.readAsStringAsync(input.uri, {
+          encoding: FileSystem.EncodingType.UTF8,
+        })
+      ).trim();
+      if (text.length >= 20) {
+        return { text, method: 'pdf-text' };
+      }
+      return {
+        text,
+        method: 'empty',
+        warning: 'Not enough readable text was found in this file.',
+      };
+    }
+
     if (input.sourceType === 'pdf') {
       const text = await extractPdfText(input.uri);
       if (text.length >= 40) {
@@ -88,22 +109,31 @@ export async function extractTextFromSource(input: {
       };
     }
 
-    const text = await extractImageText(input.uri);
-    if (text.length >= 20) {
-      return { text, method: 'ocr' };
+    if (input.sourceType === 'photo') {
+      const text = await extractImageText(input.uri);
+      if (text.length >= 20) {
+        return { text, method: 'ocr' };
+      }
+      return {
+        text,
+        method: 'empty',
+        warning:
+          'Could not read enough text from this photo. Use a clearer, well-lit picture of your notes.',
+      };
     }
+
     return {
-      text,
+      text: '',
       method: 'empty',
       warning:
-        'Could not read enough text from this photo. Use a clearer, well-lit picture of your notes.',
+        'This file type is analyzed by AI directly. Use Generate Flashcards on the Dashboard.',
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Unknown extraction error';
     return {
       text: '',
       method: 'empty',
-      warning: `Could not analyze the ${input.sourceType}: ${detail}`,
+      warning: `Could not analyze the file: ${detail}`,
     };
   }
 }

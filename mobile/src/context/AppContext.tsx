@@ -15,6 +15,7 @@ import type {
   Stats,
   Subject,
 } from '../api/types';
+import type { SourceKind } from '../storage/sourceMime';
 
 type ToastState = { message: string; visible: boolean };
 
@@ -29,7 +30,7 @@ type AppContextValue = {
   updateSubject: (id: number, name: string, icon: string) => Promise<void>;
   deleteSubject: (id: number) => Promise<void>;
   generateFromSource: (
-    sourceType: 'pdf' | 'photo',
+    sourceType: SourceKind,
     filename: string,
     uri?: string,
   ) => Promise<GenerateDraftResponse>;
@@ -115,7 +116,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const generateFromSource = useCallback(
-    async (sourceType: 'pdf' | 'photo', filename: string, uri?: string) => {
+    async (sourceType: SourceKind, filename: string, uri?: string) => {
       return api.generateFlashcards(sourceType, filename, uri);
     },
     [],

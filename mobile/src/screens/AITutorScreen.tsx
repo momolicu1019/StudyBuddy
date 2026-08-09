@@ -1,8 +1,9 @@
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,19 +16,34 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api } from '../api/client';
-import { Card, PrimaryButton } from '../components/ui';
+import type { DraftFlashcard } from '../api/types';
+import { AppModal, Card, PrimaryButton, SearchInput } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
+import { buildFlashcardsFromTutorReply } from '../storage/flashcardGenerator';
+import { friendlyAiError } from '../storage/geminiClient';
 import { isCloudTutorConfigured } from '../storage/tutorEngine';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AITutor'>;
 
-type ChatItem = { role: 'user' | 'assistant'; text: string };
+type ChatItem = {
+  role: 'user' | 'assistant';
+  text: string;
+  /** Real tutor answers can be turned into flashcards. */
+  allowFlashcards?: boolean;
+};
+
+const FOLDER_ICONS = ['📚', '🧬', '🔬', '➗', '🌎', '📖', '💻', '🎨'];
 
 export function AITutorScreen({ route }: Props) {
   const subject = route.params?.subject;
-  const { showToast } = useApp();
+  const {
+    subjects,
+    showToast,
+    createSubject,
+    saveDraftFlashcards,
+  } = useApp();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const tabBarHeight = useContext(BottomTabBarHeightContext) ?? 0;
@@ -40,10 +56,32 @@ export function AITutorScreen({ route }: Props) {
     {
       role: 'assistant',
       text: subject
-        ? `Hi! I'm your AI Tutor for ${subject}. Ask me a real question and I'll answer it using your notes${cloudReady ? ' and AI' : ''}.`
-        : `Hi! I'm your Study Buddy AI Tutor. Ask a content question (for example “What is photosynthesis?”) and I'll answer it${cloudReady ? '' : ' from your flashcards, or with AI once a key is configured'}.`,
+        ? `Hi! I'm your AI Tutor for ${subject}. Ask a real question and I'll answer it using your notes${cloudReady ? ' and AI' : ''}.`
+        : `Hi! I'm your Study Buddy AI Tutor. Ask a content question (for example “What is photosynthesis?”) and I'll answer it${cloudReady ? '' : ' from your flashcards'}.`,
     },
   ]);
+
+  const [cardSource, setCardSource] = useState<{
+    reply: string;
+    question?: string;
+  } | null>(null);
+  const [draftCards, setDraftCards] = useState<DraftFlashcard[] | null>(null);
+  const [makingCards, setMakingCards] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveFolderId, setSaveFolderId] = useState<number | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [folderName, setFolderName] = useState('');
+  const [folderIcon, setFolderIcon] = useState('📚');
+
+  const matchedSubjectId = useMemo(() => {
+    if (!subject) return subjects[0]?.id ?? null;
+    return (
+      subjects.find((s) => s.name.toLowerCase() === subject.trim().toLowerCase())
+        ?.id ??
+      subjects[0]?.id ??
+      null
+    );
+  }, [subject, subjects]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -63,6 +101,23 @@ export function AITutorScreen({ route }: Props) {
     };
   }, []);
 
+  useEffect(() => {
+    if (saveFolderId == null && matchedSubjectId != null && !creatingFolder) {
+      setSaveFolderId(matchedSubjectId);
+    }
+  }, [matchedSubjectId, saveFolderId, creatingFolder]);
+
+  function closeCardModal() {
+    setCardSource(null);
+    setDraftCards(null);
+    setMakingCards(false);
+    setSaving(false);
+    setCreatingFolder(false);
+    setFolderName('');
+    setFolderIcon('📚');
+    setSaveFolderId(matchedSubjectId);
+  }
+
   async function send() {
     const text = input.trim();
     if (!text) {
@@ -79,7 +134,10 @@ export function AITutorScreen({ route }: Props) {
     setBusy(true);
     try {
       const res = await api.askTutor(text, subject, history);
-      setMessages((prev) => [...prev, { role: 'assistant', text: res.reply }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', text: res.reply, allowFlashcards: true },
+      ]);
       requestAnimationFrame(() => {
         scrollRef.current?.scrollToEnd({ animated: true });
       });
@@ -88,8 +146,7 @@ export function AITutorScreen({ route }: Props) {
         ...prev,
         {
           role: 'assistant',
-          text:
-            'I could not answer that just now. Check your connection or AI key, then try asking again.',
+          text: 'I could not answer that just now. Please try asking again in a moment.',
         },
       ]);
     } finally {
@@ -97,7 +154,71 @@ export function AITutorScreen({ route }: Props) {
     }
   }
 
-  // Stack header + tab bar (when opened from tabs) so the composer clears the keyboard.
+  async function startFlashcardsFromReply(reply: string, messageIndex: number) {
+    if (makingCards || busy) return;
+    const priorUser = [...messages]
+      .slice(0, messageIndex)
+      .reverse()
+      .find((m) => m.role === 'user');
+
+    setCardSource({ reply, question: priorUser?.text });
+    setDraftCards(null);
+    setMakingCards(true);
+    setSaveFolderId(matchedSubjectId);
+    try {
+      const result = await buildFlashcardsFromTutorReply({
+        reply,
+        question: priorUser?.text,
+        subject,
+      });
+      if (!result.cards.length) {
+        showToast(
+          result.aiError
+            ? friendlyAiError(result.aiError)
+            : 'Could not create flashcards from that reply.',
+        );
+        closeCardModal();
+        return;
+      }
+      setDraftCards(result.cards);
+    } catch (error) {
+      showToast(friendlyAiError(error));
+      closeCardModal();
+    } finally {
+      setMakingCards(false);
+    }
+  }
+
+  async function createFolderInline() {
+    const name = folderName.trim();
+    if (!name) {
+      showToast('Enter a subject name');
+      return;
+    }
+    const created = await createSubject(name, folderIcon);
+    setSaveFolderId(created.id);
+    setCreatingFolder(false);
+    setFolderName('');
+  }
+
+  async function onSaveCards() {
+    if (!draftCards?.length) return;
+    if (saveFolderId == null) {
+      showToast('Choose a subject folder first');
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await saveDraftFlashcards(saveFolderId, draftCards);
+      showToast(result.message);
+      closeCardModal();
+    } catch {
+      showToast('Could not save flashcards. Try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const keyboardOffset =
     headerHeight + (Platform.OS === 'ios' ? Math.max(tabBarHeight, 8) : 12);
 
@@ -119,9 +240,8 @@ export function AITutorScreen({ route }: Props) {
         <Text style={styles.sub}>
           Ask questions and get direct answers
           {subject ? ` for ${subject}` : ''}.
-          {!cloudReady
-            ? ' Tip: restart Expo with `npx expo start -c` so your Gemini key from mobile/.env loads.'
-            : ' Gemini is connected.'}
+          {!cloudReady ? ' AI is offline on this device right now.' : ' AI is ready.'}
+          {' '}You can turn answers into flashcards.
         </Text>
 
         <View style={styles.chat}>
@@ -134,6 +254,18 @@ export function AITutorScreen({ route }: Props) {
               ]}
             >
               <Text style={styles.bubbleText}>{m.text}</Text>
+              {m.role === 'assistant' && m.allowFlashcards ? (
+                <PrimaryButton
+                  label={
+                    makingCards && cardSource?.reply === m.text
+                      ? 'Creating cards…'
+                      : 'Make flashcards'
+                  }
+                  variant="secondary"
+                  onPress={() => void startFlashcardsFromReply(m.text, i)}
+                  style={styles.cardAction}
+                />
+              ) : null}
             </Card>
           ))}
         </View>
@@ -166,10 +298,128 @@ export function AITutorScreen({ route }: Props) {
         />
         <PrimaryButton
           label={busy ? '…' : 'Send'}
-          onPress={send}
+          onPress={() => void send()}
           style={{ minWidth: 88, opacity: busy ? 0.7 : 1 }}
         />
       </View>
+
+      <AppModal
+        visible={!!cardSource}
+        onClose={() => {
+          if (makingCards || saving) return;
+          closeCardModal();
+        }}
+      >
+        <Text style={styles.modalTitle}>
+          {makingCards ? 'Creating flashcards…' : 'Flashcards from tutor answer'}
+        </Text>
+        <Text style={[styles.sub, { marginTop: 8 }]}>
+          {makingCards
+            ? 'Turning this explanation into exam-review cards.'
+            : draftCards
+              ? `${draftCards.length} card${draftCards.length === 1 ? '' : 's'} ready to save.`
+              : 'Preparing cards…'}
+        </Text>
+
+        {draftCards?.[0] ? (
+          <View style={styles.sample}>
+            <Text style={styles.sampleLabel}>Sample</Text>
+            <Text style={styles.sampleTitle}>{draftCards[0].question}</Text>
+            <Text style={[styles.sub, { marginTop: 6 }]}>{draftCards[0].answer}</Text>
+          </View>
+        ) : null}
+
+        {!makingCards && draftCards ? (
+          <>
+            <Text style={[styles.sub, { marginTop: 16, marginBottom: 8, fontWeight: '700' }]}>
+              Save to subject
+            </Text>
+
+            {creatingFolder || subjects.length === 0 ? (
+              <View>
+                <Text style={styles.sub}>
+                  {subjects.length === 0
+                    ? 'No subjects yet. Create one to save these flashcards.'
+                    : 'Name your new subject.'}
+                </Text>
+                <SearchInput
+                  value={folderName}
+                  onChangeText={setFolderName}
+                  placeholder="e.g. Biology"
+                  style={styles.folderNameInput}
+                />
+                <View style={styles.subjectChips}>
+                  {FOLDER_ICONS.map((icon) => (
+                    <Pressable
+                      key={icon}
+                      onPress={() => setFolderIcon(icon)}
+                      style={[styles.chip, folderIcon === icon && styles.chipActive]}
+                    >
+                      <Text style={{ fontSize: 18 }}>{icon}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <View style={[styles.row, { marginTop: 12 }]}>
+                  {subjects.length > 0 ? (
+                    <PrimaryButton
+                      label="Back"
+                      variant="secondary"
+                      onPress={() => setCreatingFolder(false)}
+                      style={styles.flexBtn}
+                    />
+                  ) : null}
+                  <PrimaryButton
+                    label="Create subject"
+                    onPress={() => void createFolderInline()}
+                    style={styles.flexBtn}
+                  />
+                </View>
+              </View>
+            ) : (
+              <>
+                <View style={styles.subjectChips}>
+                  {subjects.map((s) => (
+                    <Pressable
+                      key={s.id}
+                      onPress={() => setSaveFolderId(s.id)}
+                      style={[styles.chip, saveFolderId === s.id && styles.chipActive]}
+                    >
+                      <Text
+                        style={[
+                          styles.chipText,
+                          saveFolderId === s.id && styles.chipTextActive,
+                        ]}
+                      >
+                        {s.icon} {s.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <PrimaryButton
+                  label="+ New subject"
+                  variant="secondary"
+                  onPress={() => setCreatingFolder(true)}
+                  style={{ marginTop: 10 }}
+                />
+              </>
+            )}
+
+            <View style={[styles.row, { marginTop: 20 }]}>
+              <PrimaryButton
+                label="Discard"
+                variant="secondary"
+                onPress={closeCardModal}
+                style={styles.flexBtn}
+              />
+              <PrimaryButton
+                label={saving ? 'Saving…' : 'Save flashcards'}
+                onPress={() => void onSaveCards()}
+                style={{ flex: 1, opacity: saving ? 0.7 : 1 }}
+              />
+            </View>
+          </>
+        ) : null}
+      </AppModal>
     </KeyboardAvoidingView>
   );
 }
@@ -187,8 +437,9 @@ const styles = StyleSheet.create({
     borderColor: '#D9D5FF',
     alignSelf: 'flex-end',
   },
-  botBubble: { alignSelf: 'flex-start' },
+  botBubble: { alignSelf: 'flex-start', maxWidth: '100%' },
   bubbleText: { color: colors.ink, lineHeight: 22, fontSize: 15 },
+  cardAction: { marginTop: 12, alignSelf: 'stretch' },
   composer: {
     flexDirection: 'row',
     gap: 10,
@@ -211,4 +462,47 @@ const styles = StyleSheet.create({
     color: colors.ink,
     backgroundColor: colors.bg,
   },
+  modalTitle: { fontSize: 22, fontWeight: '800', color: colors.ink },
+  sample: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: colors.purpleTint,
+  },
+  sampleLabel: {
+    color: colors.primary,
+    fontWeight: '800',
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  sampleTitle: {
+    marginTop: 8,
+    fontWeight: '800',
+    color: colors.ink,
+    fontSize: 16,
+  },
+  subjectChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#fff',
+  },
+  chipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  chipText: { color: colors.ink, fontWeight: '700', fontSize: 13 },
+  chipTextActive: { color: colors.primary },
+  folderNameInput: { marginTop: 10 },
+  row: { flexDirection: 'row', gap: 10 },
+  flexBtn: { flex: 1 },
 });

@@ -17,6 +17,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Toast } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth, useAuthInitials } from '../context/AuthContext';
+import { AboutModal } from '../screens/AboutModal';
 import { AccountModal } from '../screens/AccountModal';
 import { AITutorScreen } from '../screens/AITutorScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
@@ -67,21 +68,28 @@ const TAB_META: Record<
 function BrandHeader() {
   const initials = useAuthInitials();
   const [accountOpen, setAccountOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   return (
     <>
       <View style={styles.topbar}>
-        <View style={styles.brand}>
+        <Pressable
+          style={styles.brand}
+          onPress={() => setAboutOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="About Study Buddy AI"
+        >
           <View style={styles.logo}>
             <Text style={styles.logoText}>✦</Text>
           </View>
           <Text style={styles.brandText}>Study Buddy AI</Text>
-        </View>
+        </Pressable>
         <Pressable style={styles.avatar} onPress={() => setAccountOpen(true)}>
           <Text style={styles.avatarText}>{initials}</Text>
         </Pressable>
       </View>
       <AccountModal visible={accountOpen} onClose={() => setAccountOpen(false)} />
+      <AboutModal visible={aboutOpen} onClose={() => setAboutOpen(false)} />
     </>
   );
 }

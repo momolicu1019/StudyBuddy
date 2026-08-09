@@ -1,10 +1,11 @@
 import type { DraftFlashcard, Flashcard, Stats, Subject } from '../api/types';
+import type { SourceKind } from './sourceMime';
 
 /** On-device database — primary Study Buddy storage (local-first). */
 export type LocalDatabase = {
   subjects: Subject[];
   flashcards: Record<string, Flashcard[]>;
-  /** Copied note files (PDF / photo) kept on device. */
+  /** Copied note files kept on device. */
   pdfs: StoredSource[];
   progress: Stats & { quizzes_taken: number };
   quizzes: QuizResultRecord[];
@@ -17,7 +18,7 @@ export type LocalDatabase = {
 export type StoredSource = {
   id: number;
   name: string;
-  source_type: 'pdf' | 'photo';
+  source_type: SourceKind;
   /** Absolute/local URI under the app documents directory. */
   uri: string;
   original_uri?: string;

@@ -47,15 +47,51 @@ function shouldTryNextModel(status: number, detail: string): boolean {
   );
 }
 
-function shortenGeminiError(status: number, detail: string): string {
-  if (status === 429) {
-    if (/limit:\s*0/i.test(detail) || /deprecated|no longer available/i.test(detail)) {
-      return 'This Gemini model has no free-tier quota (often retired). Update EXPO_PUBLIC_AI_MODEL in mobile/.env (try gemini-flash-latest).';
-    }
-    return 'Gemini rate limit hit. Wait a moment and try again, or check https://ai.dev/rate-limit';
+/**
+ * Map technical Gemini/API failures to short user-facing copy.
+ * Never include env var names, file paths, or raw provider payloads.
+ */
+export function friendlyAiError(error: unknown): string {
+  const raw =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error
+        ? error.message
+        : 'AI request failed';
+
+  const text = raw.replace(/^Gemini request failed \(\d+\):\s*/i, '').trim();
+  const lower = text.toLowerCase();
+
+  if (/not configured|api key is missing|api key is not configured/i.test(lower)) {
+    return 'AI isn’t set up on this device yet. Please try again later.';
   }
-  const firstLine = detail.split('\n')[0]?.trim() || detail;
-  return firstLine.slice(0, 220);
+  if (/429|rate limit|quota|resource exhausted|limit:\s*0/i.test(lower)) {
+    return 'The AI service is temporarily busy or out of quota. Please wait a moment and try again.';
+  }
+  if (/401|403|unauthenticated|permission|invalid.*key|api_key/i.test(lower)) {
+    return 'AI couldn’t authenticate right now. Please try again later.';
+  }
+  if (/404|not found|no longer available|deprecated/i.test(lower)) {
+    return 'The AI model is unavailable right now. Please try again later.';
+  }
+  if (/network|fetch failed|failed to fetch|timeout|timed out/i.test(lower)) {
+    return 'Couldn’t reach the AI service. Check your internet connection and try again.';
+  }
+  if (/empty analysis|no usable|no key points/i.test(lower)) {
+    return 'AI couldn’t produce a useful answer from that request. Try rephrasing.';
+  }
+
+  // Strip accidental leaks of env/config identifiers if a raw message slips through.
+  if (/expo_public_|mobile\/\.env|npx expo|generativelanguage|ai\.dev\/rate-limit/i.test(lower)) {
+    return 'AI is having trouble right now. Please try again in a moment.';
+  }
+
+  // Keep a short generic line; avoid dumping provider text.
+  return 'AI is having trouble right now. Please try again in a moment.';
+}
+
+function shortenGeminiError(status: number, detail: string): string {
+  return friendlyAiError(`Gemini request failed (${status}): ${detail}`);
 }
 
 async function generateWithGeminiModel(

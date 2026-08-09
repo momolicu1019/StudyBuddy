@@ -20,7 +20,7 @@ import { colors } from '../theme/colors';
 type Mode = 'signin' | 'signup';
 
 const BENEFITS = [
-  { icon: '🃏', label: 'Turn PDFs and notes into flashcards' },
+  { icon: '🃏', label: 'Turn notes and files into flashcards' },
   { icon: '🧠', label: 'Practice with personalized quizzes' },
   { icon: '✨', label: 'Get help from your AI tutor' },
   { icon: '🍅', label: 'Stay focused with Pomodoro sessions' },

@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   PanResponder,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -21,7 +22,7 @@ const SWIPE_THRESHOLD = 56;
 
 export function StudyScreen({ route, navigation }: Props) {
   const { subjectId } = route.params;
-  const { subjects, showToast } = useApp();
+  const { subjects, showToast, applySubjectUpdate, setStats } = useApp();
   const subject = subjects.find((s) => s.id === subjectId);
   const [cards, setCards] = useState<Flashcard[]>([]);
   const [index, setIndex] = useState(0);
@@ -30,9 +31,10 @@ export function StudyScreen({ route, navigation }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const indexRef = useRef(0);
-  const cardsLengthRef = useRef(0);
+  const cardsRef = useRef<Flashcard[]>([]);
+  const markingRef = useRef<Set<number>>(new Set());
   indexRef.current = index;
-  cardsLengthRef.current = cards.length;
+  cardsRef.current = cards;
 
   useEffect(() => {
     let alive = true;
@@ -59,6 +61,43 @@ export function StudyScreen({ route, navigation }: Props) {
     };
   }, [subjectId]);
 
+  const markCardMastered = useCallback(
+    async (cardId: number) => {
+      const current = cardsRef.current.find((c) => c.id === cardId);
+      if (!current || current.mastered || markingRef.current.has(cardId)) return;
+
+      markingRef.current.add(cardId);
+      try {
+        const res = await api.reviewFlashcard(subjectId, cardId, true);
+        setCards((prev) =>
+          prev.map((c) => (c.id === cardId ? { ...c, mastered: true } : c)),
+        );
+        applySubjectUpdate(res.subject);
+        setStats(res.stats);
+
+        if (res.subject.cards > 0 && res.subject.mastered >= res.subject.cards) {
+          showToast('All cards mastered for this folder');
+        }
+      } catch {
+        // Keep studying even if progress write fails.
+      } finally {
+        markingRef.current.delete(cardId);
+      }
+    },
+    [applySubjectUpdate, setStats, showToast, subjectId],
+  );
+
+  function revealExplanation() {
+    setFlipped((wasFlipped) => {
+      const next = !wasFlipped;
+      if (!wasFlipped && next) {
+        const cardId = cardsRef.current[indexRef.current]?.id;
+        if (cardId != null) void markCardMastered(cardId);
+      }
+      return next;
+    });
+  }
+
   function goPrevious() {
     if (indexRef.current <= 0) {
       showToast('This is the first card');
@@ -69,12 +108,18 @@ export function StudyScreen({ route, navigation }: Props) {
   }
 
   function goNext() {
-    if (indexRef.current >= cardsLengthRef.current - 1) {
-      showToast('This is the last card');
+    const current = cardsRef.current[indexRef.current];
+    // Advancing after reading counts as mastered even if they didn't flip first.
+    if (current && !current.mastered) {
+      void markCardMastered(current.id);
+    }
+
+    if (indexRef.current >= cardsRef.current.length - 1) {
+      showToast('Deck finished — progress saved');
       return;
     }
     setFlipped(false);
-    setIndex((i) => Math.min(cardsLengthRef.current - 1, i + 1));
+    setIndex((i) => Math.min(cardsRef.current.length - 1, i + 1));
   }
 
   const panResponder = useMemo(
@@ -92,12 +137,12 @@ export function StudyScreen({ route, navigation }: Props) {
             return;
           }
           if (Math.abs(gesture.dx) < 10 && Math.abs(gesture.dy) < 10) {
-            setFlipped((f) => !f);
+            revealExplanation();
           }
         },
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable via refs
-    [showToast],
+    [markCardMastered, showToast],
   );
 
   if (loading) {
@@ -125,7 +170,7 @@ export function StudyScreen({ route, navigation }: Props) {
       <View style={styles.center}>
         <Text style={styles.h2}>No flashcards yet</Text>
         <Text style={[styles.sub, { marginVertical: 10, textAlign: 'center' }]}>
-          Upload a PDF or photo on the Dashboard to generate cards for{' '}
+          Upload a file or photo on the Dashboard to generate cards for{' '}
           {subject?.name ?? 'this subject'}.
         </Text>
         <PrimaryButton label="Back to Dashboard" onPress={() => navigation.goBack()} />
@@ -136,18 +181,35 @@ export function StudyScreen({ route, navigation }: Props) {
   const card = cards[index];
   const atStart = index <= 0;
   const atEnd = index >= cards.length - 1;
+  const masteredCount = cards.filter((c) => c.mastered).length;
+  const progressPct = cards.length
+    ? Math.round((masteredCount / cards.length) * 100)
+    : 0;
 
   return (
     <View style={styles.root}>
       <Text style={styles.eyebrow}>
         {subject?.icon} {subject?.name ?? 'Study'} · {index + 1}/{cards.length}
+        {` · ${progressPct}% mastered`}
       </Text>
 
       <View style={{ flex: 1 }} {...panResponder.panHandlers}>
         <Card style={[styles.card, flipped ? styles.cardFlipped : undefined]}>
-          <Text style={styles.label}>{flipped ? 'Summary' : 'Key point'}</Text>
-          <Text style={styles.prompt}>{flipped ? card.answer : card.question}</Text>
-          <Text style={styles.hint}>Tap to flip · Swipe left/right to change cards</Text>
+          <Text style={styles.label}>{flipped ? 'Explanation' : 'Key concept'}</Text>
+          <ScrollView
+            style={styles.bodyScroll}
+            contentContainerStyle={styles.bodyContent}
+            showsVerticalScrollIndicator={flipped}
+          >
+            <Text style={[styles.prompt, flipped && styles.promptExplanation]}>
+              {flipped ? card.answer : card.question}
+            </Text>
+          </ScrollView>
+          <Text style={styles.hint}>
+            {card.mastered
+              ? 'Mastered · Tap to flip · Swipe to change cards'
+              : 'Tap to reveal explanation (marks mastered) · Swipe/Next also saves progress'}
+          </Text>
         </Card>
       </View>
 
@@ -159,9 +221,9 @@ export function StudyScreen({ route, navigation }: Props) {
           style={{ flex: 1, opacity: atStart ? 0.5 : 1 }}
         />
         <PrimaryButton
-          label="Next"
+          label={atEnd ? 'Finish' : 'Next'}
           onPress={goNext}
-          style={{ flex: 1, opacity: atEnd ? 0.5 : 1 }}
+          style={{ flex: 1 }}
         />
       </View>
     </View>
@@ -181,17 +243,25 @@ const styles = StyleSheet.create({
   card: {
     flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
+    alignItems: 'stretch',
     backgroundColor: '#fff',
   },
   cardFlipped: { backgroundColor: colors.purpleTint },
   label: {
     color: colors.primary,
     fontWeight: '800',
-    marginBottom: 16,
+    marginBottom: 12,
     textTransform: 'uppercase',
     letterSpacing: 1,
     fontSize: 12,
+    textAlign: 'center',
+  },
+  bodyScroll: { flexGrow: 1, flexShrink: 1 },
+  bodyContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    paddingVertical: 8,
   },
   prompt: {
     fontSize: 22,
@@ -201,7 +271,13 @@ const styles = StyleSheet.create({
     lineHeight: 32,
     paddingHorizontal: 8,
   },
-  hint: { marginTop: 28, color: colors.muted, textAlign: 'center' },
+  promptExplanation: {
+    fontSize: 16,
+    fontWeight: '600',
+    lineHeight: 24,
+    textAlign: 'left',
+  },
+  hint: { marginTop: 16, color: colors.muted, textAlign: 'center' },
   row: { flexDirection: 'row', gap: 10, marginTop: 16, marginBottom: 8 },
   h2: { fontSize: 22, fontWeight: '800', color: colors.ink },
   sub: { color: colors.muted },

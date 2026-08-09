@@ -1,6 +1,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 
 import type { StoredSource } from './schema';
+import type { SourceKind } from './sourceMime';
 import { updateLocalDb } from './store';
 
 function sourcesDir(): string {
@@ -21,17 +22,17 @@ async function ensureSourcesDir(): Promise<string> {
 }
 
 /**
- * Persist an uploaded PDF or photo into on-device storage.
+ * Persist an uploaded study file into on-device storage.
  * Returns the local copy metadata recorded in the database.
  */
 export async function persistSourceFile(input: {
   name: string;
-  sourceType: 'pdf' | 'photo';
+  sourceType: SourceKind;
   uri: string;
   subjectId?: number;
 }): Promise<StoredSource> {
   const dir = await ensureSourcesDir();
-  const safeName = input.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const safeName = input.name.replace(/[^a-zA-Z0-9._-]+/g, '_');
   const stamp = Date.now();
   const dest = `${dir}${stamp}_${safeName}`;
 

@@ -21,6 +21,8 @@ import type {
   TutorReply,
 } from '../api/types';
 import { persistSourceFile } from './pdfs';
+import type { SourceKind } from './sourceMime';
+import { labelForSource } from './sourceMime';
 import { loadLocalDb, updateLocalDb } from './store';
 import { generateFlashcardsViaGeminiPipeline } from './studyPipeline';
 
@@ -99,13 +101,13 @@ export const localBackend = {
   },
 
   async generateFlashcards(
-    sourceType: 'pdf' | 'photo',
+    sourceType: SourceKind,
     filename: string,
     uri?: string,
   ): Promise<GenerateDraftResponse> {
     if (!uri) {
       throw new Error(
-        'A file URI is required so Gemini can analyze your PDF or photo.',
+        'A file URI is required so Gemini can analyze your notes.',
       );
     }
 
@@ -133,7 +135,7 @@ export const localBackend = {
       sample_question: sample.question,
       sample_answer: sample.answer,
       message:
-        `${result.cards.length} review flashcards were created from Gemini’s analysis of "${filename}".` +
+        `${result.cards.length} review flashcards were created from Gemini’s analysis of "${filename}" (${labelForSource(sourceType)}).` +
         overviewBit +
         ' Choose a subject to save them.',
       filename,
@@ -191,11 +193,15 @@ export const localBackend = {
       const card = cards.find((c) => c.id === cardId);
       if (!card) throw new Error('Flashcard not found');
 
+      const changed = card.mastered !== mastered;
       card.mastered = mastered;
       found.cards = cards.length;
       found.mastered = recountMastered(cards);
       found.last = 'Just now';
-      db.progress.flashcards_reviewed += 1;
+      // Count a review only when mastery state actually changes.
+      if (changed) {
+        db.progress.flashcards_reviewed += 1;
+      }
 
       flashcard = { ...card };
       subject = { ...found };

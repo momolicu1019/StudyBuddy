@@ -1,6 +1,6 @@
 import type { Flashcard, Subject, TutorReply } from '../api/types';
 import { isAiConfigured } from './aiConfig';
-import { generateAiText } from './geminiClient';
+import { friendlyAiError, generateAiText } from './geminiClient';
 
 export type TutorMessage = {
   role: 'user' | 'assistant';
@@ -246,7 +246,7 @@ function answerFromNotes(ctx: TutorContext): string {
     `You asked: “${question}”\n\n` +
     (isAiConfigured()
       ? 'Live AI could not answer this one. Try again in a moment.'
-      : 'Add EXPO_PUBLIC_AI_API_KEY in mobile/.env and restart with `npx expo start -c`.') +
+      : 'AI isn’t available right now. You can still ask about topics from your flashcards.') +
     '\n\nTip: generate flashcards from your notes first, then ask about those topics.'
   );
 }
@@ -269,14 +269,11 @@ export async function answerTutorQuestion(
     const cloud = await askCloudTutor({ ...ctx, message: text });
     if (cloud) return { reply: cloud };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : 'AI request failed';
-    // Prefer a clear cloud failure over a long offline fallback dump.
     if (isAiConfigured()) {
-      const short = detail.replace(/^Gemini request failed \(\d+\):\s*/i, '');
       return {
         reply:
-          `I couldn't get a live AI answer just now.\n\n${short}\n\n` +
-          'If this keeps happening, set EXPO_PUBLIC_AI_MODEL=gemini-flash-latest in mobile/.env and restart Expo.',
+          `I couldn't get a live AI answer just now.\n\n${friendlyAiError(error)}\n\n` +
+          'You can try asking again, or study from your flashcards in the meantime.',
       };
     }
     return { reply: answerFromNotes({ ...ctx, message: text }) };

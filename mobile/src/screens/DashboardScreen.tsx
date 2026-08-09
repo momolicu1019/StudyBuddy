@@ -24,6 +24,12 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
+import {
+  DOCUMENT_PICKER_TYPES,
+  detectSourceKind,
+  shortLabelForSource,
+  type SourceKind,
+} from '../storage/sourceMime';
 import { colors } from '../theme/colors';
 
 const FOLDER_ICONS = ['📚', '🧬', '🔬', '➗', '🌎', '📖', '💻', '🎨'];
@@ -36,7 +42,7 @@ function firstNameFrom(fullName?: string | null): string {
 
 type SelectedSource = {
   name: string;
-  type: 'pdf' | 'photo';
+  type: SourceKind;
   uri: string;
 };
 
@@ -70,17 +76,24 @@ export function DashboardScreen() {
     stats.focus_hours > 0 ||
     subjects.some((s) => s.cards > 0);
 
-  async function pickPdf() {
+  async function pickDocument() {
     const result = await DocumentPicker.getDocumentAsync({
-      type: 'application/pdf',
+      type: DOCUMENT_PICKER_TYPES,
       copyToCacheDirectory: true,
+      multiple: false,
     });
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
-    setSelectedSource({ name: asset.name, type: 'pdf', uri: asset.uri });
+    const kind = detectSourceKind({
+      filename: asset.name,
+      uri: asset.uri,
+      mimeType: asset.mimeType,
+      fallback: 'pdf',
+    });
+    setSelectedSource({ name: asset.name, type: kind, uri: asset.uri });
     setDraft(null);
     setSavedSubject(null);
-    showToast('PDF ready — tap Generate Flashcards');
+    showToast(`${shortLabelForSource(kind)} ready — tap Generate Flashcards`);
   }
 
   async function pickPhoto() {
@@ -127,7 +140,7 @@ export function DashboardScreen() {
 
   async function onGenerate() {
     if (!selectedSource) {
-      showToast('Upload a PDF or take a photo first');
+      showToast('Upload a file or take a photo first');
       return;
     }
     if (generating) return;
@@ -220,12 +233,18 @@ export function DashboardScreen() {
         <Card style={styles.upload}>
           <IconBubble size={58}>📚</IconBubble>
           <Text style={styles.uploadTitle}>Create flashcards from your notes</Text>
-          <Text style={styles.subCenter}>Upload a PDF or take a photo</Text>
+          <Text style={styles.subCenter}>
+            Upload PDF, Word, PowerPoint, Excel, text, or take a photo
+          </Text>
           <View style={styles.row}>
-            <PrimaryButton label="📄 Upload PDF" onPress={pickPdf} style={styles.flexBtn} />
+            <PrimaryButton
+              label="📄 Upload file"
+              onPress={() => void pickDocument()}
+              style={styles.flexBtn}
+            />
             <PrimaryButton
               label="📷 Take a Photo"
-              onPress={pickPhoto}
+              onPress={() => void pickPhoto()}
               variant="secondary"
               style={styles.flexBtn}
             />
@@ -236,14 +255,14 @@ export function DashboardScreen() {
               <Text style={styles.sourceName}>{selectedSource.name}</Text>
               <Text style={styles.sub}>
                 {generating
-                  ? 'Submitting to Gemini… then converting the summary into flashcards.'
+                  ? 'Submitting to AI… then converting the summary into flashcards.'
                   : selectedSource.type === 'photo'
-                    ? '📷 Photo ready. Tap generate to submit it to Gemini.'
-                    : '📄 PDF ready. Tap generate to submit it to Gemini.'}
+                    ? '📷 Photo ready. Tap generate to analyze it.'
+                    : `📄 ${shortLabelForSource(selectedSource.type)} ready. Tap generate to analyze it.`}
               </Text>
               <PrimaryButton
-                label={generating ? '✨ Gemini is analyzing…' : '✨ Generate Flashcards'}
-                onPress={onGenerate}
+                label={generating ? '✨ Analyzing…' : '✨ Generate Flashcards'}
+                onPress={() => void onGenerate()}
                 style={{ marginTop: 12, opacity: generating ? 0.7 : 1 }}
               />
               <PrimaryButton

@@ -3,6 +3,11 @@ import * as FileSystem from 'expo-file-system/legacy';
 import type { DraftFlashcard } from '../api/types';
 import { isAiConfigured } from './aiConfig';
 import { generateWithGemini } from './geminiClient';
+import {
+  labelForSource,
+  mimeForSource,
+  type SourceKind,
+} from './sourceMime';
 
 const MAX_CARDS = 16;
 const MAX_INLINE_CHARS = 12_000_000;
@@ -17,18 +22,6 @@ export type PipelineResult = {
   cards: DraftFlashcard[];
   usedAi: true;
 };
-
-function guessMime(
-  sourceType: 'pdf' | 'photo',
-  filename?: string,
-  uri?: string,
-): string {
-  const name = `${filename ?? ''} ${uri ?? ''}`.toLowerCase();
-  if (sourceType === 'pdf') return 'application/pdf';
-  if (name.includes('.png')) return 'image/png';
-  if (name.includes('.webp')) return 'image/webp';
-  return 'image/jpeg';
-}
 
 function parseJsonObject(raw: string): Record<string, unknown> | null {
   const trimmed = raw.trim();
@@ -63,11 +56,39 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
 function toReviewCard(title: string, summary: string): DraftFlashcard | null {
   const front = title.trim().replace(/\?+$/g, '').trim();
   const back = summary.trim();
-  if (front.length < 2 || back.length < 12) return null;
+  // Exam reviewers need a real explanation, not a tiny phrase.
+  if (front.length < 2 || back.length < 40) return null;
   if (/^(what|why|how|when|where|who|which)\b/i.test(front)) {
     return { question: front.replace(/\?+$/g, '').trim(), answer: back };
   }
   return { question: front, answer: back };
+}
+
+function buildExplanation(row: Record<string, unknown>): string {
+  const parts = [
+    row.explanation,
+    row.summary,
+    row.detail,
+    row.details,
+    row.notes,
+    row.content,
+    row.back,
+    row.why_it_matters,
+    row.whyItMatters,
+    row.example,
+    row.formula,
+  ]
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean);
+
+  // Prefer a single rich explanation field; otherwise join unique parts.
+  const unique: string[] = [];
+  for (const part of parts) {
+    if (!unique.some((u) => u.toLowerCase() === part.toLowerCase())) {
+      unique.push(part);
+    }
+  }
+  return unique.join('\n\n').trim();
 }
 
 /**
@@ -94,9 +115,9 @@ export function translateAnalysisToFlashcards(
     const chunks = analysis.overview
       .split(/(?<=[.!?])\s+/)
       .map((s) => s.trim())
-      .filter((s) => s.length >= 30);
+      .filter((s) => s.length >= 40);
     chunks.slice(0, 8).forEach((chunk, i) => {
-      const card = toReviewCard(`Key point ${i + 1}`, chunk);
+      const card = toReviewCard(`Key concept ${i + 1}`, chunk);
       if (card) cards.push(card);
     });
   }
@@ -127,11 +148,15 @@ function parseAnalysis(raw: string): StudyAnalysis {
     if (!item || typeof item !== 'object') continue;
     const row = item as Record<string, unknown>;
     const title = String(
-      row.title ?? row.key_point ?? row.topic ?? row.heading ?? row.front ?? '',
+      row.title ??
+        row.key_point ??
+        row.topic ??
+        row.heading ??
+        row.concept ??
+        row.front ??
+        '',
     ).trim();
-    const summary = String(
-      row.summary ?? row.detail ?? row.notes ?? row.content ?? row.back ?? '',
-    ).trim();
+    const summary = buildExplanation(row);
     if (!title || !summary) continue;
     keyPoints.push({ title, summary });
   }
@@ -141,18 +166,18 @@ function parseAnalysis(raw: string): StudyAnalysis {
 
 /**
  * Full Study Buddy generation flow:
- * 1) Upload PDF/photo
+ * 1) Upload study file (PDF, Word, PowerPoint, Excel, text, or photo)
  * 2) Submit file to Gemini for analysis
  * 3) Translate Gemini summary/key points into flashcards
  */
 export async function generateFlashcardsViaGeminiPipeline(input: {
   uri: string;
-  sourceType: 'pdf' | 'photo';
+  sourceType: SourceKind;
   filename?: string;
 }): Promise<PipelineResult> {
   if (!isAiConfigured()) {
     throw new Error(
-      'Gemini API key is missing. Add EXPO_PUBLIC_AI_API_KEY in mobile/.env and restart with npx expo start -c',
+      'AI isn’t set up on this device yet. Please try again later.',
     );
   }
 
@@ -164,32 +189,45 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
   }
   if (base64.length > MAX_INLINE_CHARS) {
     throw new Error(
-      'File is too large for Gemini upload. Try a smaller PDF or a clearer cropped photo.',
+      'File is too large for AI upload. Try a smaller file or a clearer cropped photo.',
     );
   }
 
-  const mimeType = guessMime(input.sourceType, input.filename, input.uri);
-  const sourceLabel =
-    input.sourceType === 'pdf' ? 'PDF document' : 'photo of student notes';
+  const mimeType = mimeForSource(input.sourceType, input.filename, input.uri);
+  const sourceLabel = labelForSource(input.sourceType);
 
   const analyzePrompt = [
-    'You are Study Buddy, an expert study coach.',
-    `Analyze this ${sourceLabel} thoroughly.`,
+    'You are Study Buddy, an academic research tutor who writes informative study summaries.',
+    `Read this ${sourceLabel} and extract the knowledge into exam-review flashcards.`,
     input.filename ? `Filename: ${input.filename}` : '',
     '',
     'Return ONLY valid JSON with this shape:',
     '{',
-    '  "overview": "2-4 sentence overview of the whole material",',
+    '  "overview": "2-4 sentence scholarly overview of the subject matter (not the document layout)",',
     '  "key_points": [',
-    '    { "title": "short key topic (NOT a question)", "summary": "1-3 sentence study summary" }',
+    '    {',
+    '      "title": "short concept name (NOT a quiz question)",',
+    '      "explanation": "informative research-style summary (see rules)"',
+    '    }',
     '  ]',
     '}',
     '',
-    'Rules:',
-    '- Create 8 to 16 key_points from the most important ideas.',
-    '- Titles must NOT be quiz questions (no What/Why/How...).',
-    '- Summaries should help a student review, using facts from the upload.',
-    '- Prefer definitions, processes, formulas, comparisons, and must-know facts.',
+    'Writing style for each explanation (critical):',
+    '- Write an informative summary like a concise research/textbook note about the CONCEPT.',
+    '- Explain the idea in clear academic prose: what it is, how it works, key details, and significance.',
+    '- Include formulas, mechanisms, comparisons, cause/effect, and examples from the material when present.',
+    '- Prefer 4 to 8 dense, useful sentences (or labeled bullets: Definition / Mechanism / Significance).',
+    '',
+    'Hard bans — never do these:',
+    '- Do NOT describe the page/photo layout (no “at the top of the page”, “on the left”, “the heading says”, “this slide shows”, “the image contains”).',
+    '- Do NOT narrate OCR/visual structure, boxes, columns, bullet formatting, or where text appears.',
+    '- Do NOT translate captions/labels literally as UI description; convert them into conceptual knowledge.',
+    '- Do NOT invent facts that are not supported by the material.',
+    '',
+    'Other rules:',
+    '- Create 8 to 16 key_points covering the most testable ideas.',
+    '- Titles must be concept names, not quiz questions (no What/Why/How/Define...).',
+    '- Prefer definitions, processes, formulas, comparisons, theorems, and must-know facts.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -213,7 +251,7 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
 
   if (!cards.length) {
     throw new Error(
-      'Gemini analyzed the file, but no key points could be turned into flashcards. Try a clearer PDF or photo.',
+      'AI analyzed the file, but no key points could be turned into flashcards. Try another file or a clearer photo.',
     );
   }
 
@@ -223,3 +261,4 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
     usedAi: true,
   };
 }
+

@@ -170,7 +170,7 @@ export function FlashcardsScreen() {
           {filtered.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.sub}>
-                No subject folders yet. Create one, then upload a PDF or photo.
+                No subject folders yet. Create one, then upload notes or a photo.
               </Text>
             </View>
           ) : (

@@ -24,6 +24,7 @@
     },
     "android": {
       "package": "com.studybuddy.ai",
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#6C63FF",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -48,7 +49,8 @@
           "cameraPermission": "Allow StudyBuddy to use your camera to photograph notes."
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-asset"
     ],
     "extra": {
       "eas": {

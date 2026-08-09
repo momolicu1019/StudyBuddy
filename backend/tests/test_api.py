@@ -115,13 +115,20 @@ def test_quiz_requires_saved_cards(client: TestClient):
     questions = quiz.json()
     assert len(questions) == 8
 
-    answers = {q["id"]: 0 for q in questions}
+    answers = {q["id"]: q["correct_index"] for q in questions}
     result = client.post(
         "/api/quiz/submit",
-        json={"subject_id": subject["id"], "answers": answers},
+        json={
+            "subject_id": subject["id"],
+            "answers": answers,
+            "questions": questions,
+        },
     )
     assert result.status_code == 200
-    assert result.json()["percentage"] == 100
+    body = result.json()
+    assert body["percentage"] == 100
+    assert len(body["reviews"]) == 8
+    assert all(item["is_correct"] for item in body["reviews"])
 
     stats = client.get("/api/stats").json()
     assert stats["quiz_average"] == 100

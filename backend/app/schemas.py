@@ -84,8 +84,20 @@ class QuizQuestion(BaseModel):
 
 
 class QuizSubmit(BaseModel):
-    subject_id: int
+    subject_id: int | list[int]
     answers: dict[int, int]
+    questions: list[QuizQuestion] = Field(default_factory=list)
+
+
+class QuizQuestionReview(BaseModel):
+    id: int
+    question: str
+    options: list[str]
+    selected_index: int | None = None
+    correct_index: int
+    is_correct: bool
+    correct_answer: str
+    selected_answer: str | None = None
 
 
 class QuizResult(BaseModel):
@@ -93,6 +105,7 @@ class QuizResult(BaseModel):
     total: int
     percentage: int
     message: str
+    reviews: list[QuizQuestionReview] = Field(default_factory=list)
 
 
 class TutorMessage(BaseModel):

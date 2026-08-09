@@ -150,6 +150,7 @@ export function AppNavigator() {
     <NavigationContainer>
       <View style={{ flex: 1 }}>
         <Stack.Navigator
+          key={showLogin ? 'auth' : 'app'}
           screenOptions={{
             headerStyle: { backgroundColor: '#fff' },
             headerTintColor: colors.ink,

@@ -76,7 +76,7 @@ export async function createLocalAccount(input: {
   if (!name || !email || !password) {
     return { ok: false, message: 'Please complete all fields.' };
   }
-  if (!email.includes('@')) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { ok: false, message: 'Please enter a valid email address.' };
   }
   if (password.length < 8) {

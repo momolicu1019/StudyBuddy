@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -139,8 +141,16 @@ export function FlashcardsScreen() {
   }
 
   return (
-    <View style={styles.root}>
-      <ScrollView contentContainerStyle={styles.content}>
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 64 : 0}
+    >
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <Text style={styles.h1}>🃏 Flashcards</Text>
         <Text style={[styles.sub, { marginBottom: 18 }]}>
           Choose a subject and start learning.
@@ -151,6 +161,7 @@ export function FlashcardsScreen() {
             value={search}
             onChangeText={setSearch}
             placeholder="🔍 Search subjects..."
+            style={styles.toolsSearch}
           />
           <PrimaryButton label="+ New Subject" onPress={() => openFolderModal()} />
         </View>
@@ -221,6 +232,7 @@ export function FlashcardsScreen() {
           value={folderName}
           onChangeText={setFolderName}
           placeholder="e.g. Biology"
+          style={styles.folderNameInput}
         />
         <View style={styles.icons}>
           {FOLDER_ICONS.map((icon) => (
@@ -283,7 +295,7 @@ export function FlashcardsScreen() {
           </View>
         </View>
       </AppModal>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -294,6 +306,12 @@ const styles = StyleSheet.create({
   h2: { fontSize: 20, fontWeight: '800', color: colors.ink },
   sub: { color: colors.muted, fontSize: 14, lineHeight: 20 },
   tools: { flexDirection: 'row', gap: 10, marginBottom: 16, alignItems: 'center' },
+  toolsSearch: { flex: 1, width: undefined, minWidth: 0 },
+  folderNameInput: {
+    alignSelf: 'stretch',
+    width: '100%',
+    minHeight: 52,
+  },
   grid: { gap: 14 },
   folder: {
     backgroundColor: '#fff',

@@ -33,6 +33,8 @@ export type GenerateDraftResponse = {
   message: string;
   filename: string;
   source_type: string;
+  warning?: string;
+  extraction_method?: 'pdf-text' | 'ocr' | 'empty';
 };
 
 export type SaveFlashcardsResponse = {
@@ -54,11 +56,23 @@ export type QuizQuestion = {
   correct_index: number;
 };
 
+export type QuizQuestionReview = {
+  id: number;
+  question: string;
+  options: string[];
+  selected_index: number | null;
+  correct_index: number;
+  is_correct: boolean;
+  correct_answer: string;
+  selected_answer: string | null;
+};
+
 export type QuizResult = {
   score: number;
   total: number;
   percentage: number;
   message: string;
+  reviews: QuizQuestionReview[];
 };
 
 export type TutorReply = {

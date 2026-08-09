@@ -1,10 +1,14 @@
 import React from 'react';
 import {
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  TextStyle,
   View,
   ViewStyle,
 } from 'react-native';
@@ -68,10 +72,12 @@ export function SearchInput({
   value,
   onChangeText,
   placeholder,
+  style,
 }: {
   value: string;
   onChangeText: (t: string) => void;
   placeholder?: string;
+  style?: TextStyle;
 }) {
   return (
     <TextInput
@@ -79,7 +85,7 @@ export function SearchInput({
       onChangeText={onChangeText}
       placeholder={placeholder}
       placeholderTextColor={colors.muted}
-      style={[styles.search, { flexGrow: 1 }]}
+      style={[styles.search, style]}
     />
   );
 }
@@ -103,12 +109,33 @@ export function AppModal({
   children: React.ReactNode;
 }) {
   return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <Pressable style={styles.modalBox} onPress={(e) => e.stopPropagation()}>
-          {children}
-        </Pressable>
-      </Pressable>
+    <Modal
+      transparent
+      visible={visible}
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={styles.keyboardRoot}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            contentContainerStyle={styles.modalScrollContent}
+          >
+            <Pressable style={styles.modalBox} onPress={(e) => e.stopPropagation()}>
+              {children}
+            </Pressable>
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -185,12 +212,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     borderRadius: 11,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    minHeight: 52,
+    width: '100%',
     backgroundColor: '#fff',
     color: colors.ink,
-    fontSize: 15,
-    flex: 1,
+    fontSize: 16,
+    lineHeight: 22,
   },
   toast: {
     position: 'absolute',
@@ -207,16 +236,26 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '600',
   },
+  keyboardRoot: {
+    flex: 1,
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: colors.overlay,
+  },
+  modalScrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
-    padding: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 24,
   },
   modalBox: {
     backgroundColor: '#fff',
     borderRadius: 22,
     padding: 24,
+    maxWidth: 520,
+    width: '100%',
+    alignSelf: 'center',
   },
   iconBubble: {
     backgroundColor: colors.iconBg,

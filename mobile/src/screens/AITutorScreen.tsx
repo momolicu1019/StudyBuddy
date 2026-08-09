@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -14,6 +14,7 @@ import { api } from '../api/client';
 import { Card, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
+import { isCloudTutorConfigured } from '../storage/tutorEngine';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AITutor'>;
@@ -23,14 +24,16 @@ type ChatItem = { role: 'user' | 'assistant'; text: string };
 export function AITutorScreen({ route }: Props) {
   const subject = route.params?.subject;
   const { showToast } = useApp();
+  const scrollRef = useRef<ScrollView>(null);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const cloudReady = isCloudTutorConfigured();
   const [messages, setMessages] = useState<ChatItem[]>([
     {
       role: 'assistant',
       text: subject
-        ? `Hi! I'm your AI Tutor for ${subject}. Ask me anything and I'll explain it step by step.`
-        : "Hi! I'm your Study Buddy AI Tutor. Ask a question about your notes, quizzes, or study plan.",
+        ? `Hi! I'm your AI Tutor for ${subject}. Ask me a real question and I'll answer it using your notes${cloudReady ? ' and AI' : ''}.`
+        : `Hi! I'm your Study Buddy AI Tutor. Ask a content question (for example “What is photosynthesis?”) and I'll answer it${cloudReady ? '' : ' from your flashcards, or with AI once a key is configured'}.`,
     },
   ]);
 
@@ -40,24 +43,27 @@ export function AITutorScreen({ route }: Props) {
       showToast('Type a question first');
       return;
     }
+    if (busy) return;
+
     setInput('');
+    const history = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(-8);
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setBusy(true);
     try {
-      const res = await api.askTutor(text, subject);
+      const res = await api.askTutor(text, subject, history);
       setMessages((prev) => [...prev, { role: 'assistant', text: res.reply }]);
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      });
     } catch {
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
           text:
-            `Let's break that down${subject ? ` for ${subject}` : ''}.\n\n` +
-            '1) Restate the question in your own words.\n' +
-            '2) Identify the core idea.\n' +
-            '3) Connect it to one example you know.\n' +
-            '4) Teach it back in one sentence.\n\n' +
-            'Want a worked example next?',
+            'I could not answer that just now. Check your connection or AI key, then try asking again.',
         },
       ]);
     } finally {
@@ -68,14 +74,22 @@ export function AITutorScreen({ route }: Props) {
   return (
     <KeyboardAvoidingView
       style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={90}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+      >
         <Text style={styles.h1}>✦ AI Tutor</Text>
         <Text style={styles.sub}>
-          Ask questions and get step-by-step help
+          Ask questions and get direct answers
           {subject ? ` for ${subject}` : ''}.
+          {!cloudReady
+            ? ' Tip: add EXPO_PUBLIC_AI_API_KEY in mobile/.env for full AI answers on any topic.'
+            : ''}
         </Text>
 
         <View style={styles.chat}>
@@ -97,15 +111,16 @@ export function AITutorScreen({ route }: Props) {
         <TextInput
           value={input}
           onChangeText={setInput}
-          placeholder="Ask the AI Tutor..."
+          placeholder="Ask a study question..."
           placeholderTextColor={colors.muted}
           style={styles.input}
           multiline
+          editable={!busy}
         />
         <PrimaryButton
           label={busy ? '…' : 'Send'}
           onPress={send}
-          style={{ minWidth: 88 }}
+          style={{ minWidth: 88, opacity: busy ? 0.7 : 1 }}
         />
       </View>
     </KeyboardAvoidingView>
@@ -116,7 +131,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 20 },
   h1: { fontSize: 30, fontWeight: '800', color: colors.ink },
-  sub: { color: colors.muted, marginTop: 6, marginBottom: 18 },
+  sub: { color: colors.muted, marginTop: 6, marginBottom: 18, lineHeight: 20 },
   chat: { gap: 12 },
   bubble: { padding: 16 },
   userBubble: {

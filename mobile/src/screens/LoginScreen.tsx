@@ -34,6 +34,7 @@ export function LoginScreen() {
     signInWithEmail,
     createAccount,
     skipLogin,
+    googleConfigured,
   } = useAuth();
 
   const [mode, setMode] = useState<Mode>('signin');
@@ -73,10 +74,10 @@ export function LoginScreen() {
     try {
       const result = await signInWithEmail(loginEmail, loginPassword);
       if (!result.ok) {
-        setMessage(result.message);
+        setError(result.message);
         return;
       }
-      setMessage(result.message);
+      // Session is set in AuthContext — navigator leaves this screen.
     } catch {
       setError('Could not sign in. Please try again.');
     } finally {
@@ -90,6 +91,18 @@ export function LoginScreen() {
     setError(null);
     setPasswordError(false);
 
+    const name = fullName.trim();
+    const email = signupEmail.trim();
+    if (!name || !email || !signupPassword || !confirmPassword) {
+      setError('Please complete all fields.');
+      setBusy(false);
+      return;
+    }
+    if (signupPassword.length < 8) {
+      setError('Password must contain at least 8 characters.');
+      setBusy(false);
+      return;
+    }
     if (signupPassword !== confirmPassword) {
       setPasswordError(true);
       setBusy(false);
@@ -97,12 +110,12 @@ export function LoginScreen() {
     }
 
     try {
-      const result = await createAccount(fullName, signupEmail, signupPassword);
+      const result = await createAccount(name, email, signupPassword);
       if (!result.ok) {
-        setMessage(result.message);
+        setError(result.message);
         return;
       }
-      setMessage(result.message);
+      // Session is set — navigator leaves this screen.
     } catch {
       setError('Could not create account. Please try again.');
     } finally {
@@ -116,8 +129,11 @@ export function LoginScreen() {
     setError(null);
     try {
       const result = await signInWithGoogle();
-      if (!result.ok) setError(result.message);
-      else setMessage(result.message);
+      if (!result.ok) {
+        setError(result.message);
+        return;
+      }
+      // Session is set — navigator leaves this screen.
     } catch {
       setError('Could not sign in with Google. Please try again.');
     } finally {
@@ -136,7 +152,7 @@ export function LoginScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={[styles.page, showBrandPanel && styles.pageWide]}>
           {showBrandPanel ? (
@@ -178,6 +194,7 @@ export function LoginScreen() {
           <ScrollView
             contentContainerStyle={styles.formSide}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.card}>
@@ -299,11 +316,16 @@ export function LoginScreen() {
 
                   <Divider />
                   <GoogleButton label={googleLabel} busy={busy} onPress={onGoogle} />
+                  {!googleConfigured ? (
+                    <Text style={styles.hint}>
+                      Google backup runs in demo mode on this device until you add
+                      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID.
+                    </Text>
+                  ) : null}
 
                   <Text style={styles.prompt}>
-                    Don't have an account?
+                    Don't have an account?{' '}
                     <Text style={styles.link} onPress={() => switchMode('signup')}>
-                      {' '}
                       Create one
                     </Text>
                   </Text>
@@ -408,6 +430,11 @@ export function LoginScreen() {
 
                   <Divider />
                   <GoogleButton label={googleLabel} busy={busy} onPress={onGoogle} />
+                  {!googleConfigured ? (
+                    <Text style={styles.hint}>
+                      Google sign-up uses a demo Google session until OAuth is configured.
+                    </Text>
+                  ) : null}
 
                   <Text style={styles.terms}>
                     By creating an account, you agree to our{' '}
@@ -416,9 +443,8 @@ export function LoginScreen() {
                   </Text>
 
                   <Text style={styles.prompt}>
-                    Already have an account?
+                    Already have an account?{' '}
                     <Text style={styles.link} onPress={() => switchMode('signin')}>
-                      {' '}
                       Sign in
                     </Text>
                   </Text>
@@ -678,6 +704,13 @@ const styles = StyleSheet.create({
   },
   googleG: { color: '#4285F4', fontWeight: '900', fontSize: 18 },
   googleText: { color: colors.ink, fontWeight: '750' as unknown as '700', fontSize: 15 },
+  hint: {
+    marginTop: 10,
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+  },
   terms: {
     fontSize: 11,
     color: colors.muted,

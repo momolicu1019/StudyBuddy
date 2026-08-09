@@ -20,15 +20,10 @@ import type {
   Subject,
   TutorReply,
 } from '../api/types';
+import { extractTextFromSource } from './contentExtract';
+import { buildFlashcardsFromText } from './flashcardGenerator';
 import { persistSourceFile } from './pdfs';
 import { loadLocalDb, updateLocalDb } from './store';
-
-const DISTRACTORS = [
-  'Not enough information',
-  'All of the above',
-  'None of the above',
-  'It depends on context',
-];
 
 function recountMastered(cards: Flashcard[]): number {
   return cards.filter((c) => c.mastered).length;
@@ -44,22 +39,6 @@ function publicStats(progress: {
     quiz_average: progress.quiz_average,
     focus_hours: progress.focus_hours,
   };
-}
-
-function buildDraftCards(
-  sourceType: 'pdf' | 'photo',
-  filename: string,
-): DraftFlashcard[] {
-  const stem =
-    filename
-      .replace(/\.[^.]+$/, '')
-      .replace(/[_-]+/g, ' ')
-      .trim() || 'your notes';
-  const count = sourceType === 'photo' ? 8 : 12;
-  return Array.from({ length: count }, (_, i) => ({
-    question: `What is key point #${i + 1} from ${stem}?`,
-    answer: `Summarize point #${i + 1} from your ${sourceType} notes in “${stem}” using your own words.`,
-  }));
 }
 
 export const localBackend = {
@@ -125,24 +104,56 @@ export const localBackend = {
     filename: string,
     uri?: string,
   ): Promise<GenerateDraftResponse> {
-    if (uri) {
-      try {
-        await persistSourceFile({ name: filename, sourceType, uri });
-      } catch {
-        // Generation still works even if the file copy fails (e.g. web).
-      }
+    if (!uri) {
+      throw new Error(
+        'A file URI is required to analyze PDF or photo content for flashcards.',
+      );
     }
 
-    const cards = buildDraftCards(sourceType, filename);
-    const sample = cards[0];
+    try {
+      await persistSourceFile({ name: filename, sourceType, uri });
+    } catch {
+      // Generation still works even if the file copy fails (e.g. web).
+    }
+
+    const extracted = await extractTextFromSource({ sourceType, uri });
+    const generated = await buildFlashcardsFromText(extracted.text, {
+      filename,
+      sourceType,
+    });
+    const cards = generated.cards;
+    const sample = cards[0] ?? {
+      question: 'No review cards were generated',
+      answer: extracted.warning ?? 'Try another PDF or a clearer photo.',
+    };
+
+    const methodLabel =
+      extracted.method === 'pdf-text'
+        ? 'PDF text'
+        : extracted.method === 'ocr'
+          ? 'photo OCR'
+          : 'limited text';
+
+    const aiLabel = generated.usedAi
+      ? 'Gemini reviewed the content into key-point flashcards'
+      : 'key-point flashcards (local fallback)';
+
+    let message = `${cards.length} review flashcards from "${filename}" (${methodLabel} → ${aiLabel}). Choose a subject to save them.`;
+    if (extracted.warning) message += ` ${extracted.warning}`;
+    if (generated.aiError && !generated.usedAi) {
+      message += ` AI note: ${generated.aiError}`;
+    }
+
     return {
       count: cards.length,
       cards,
       sample_question: sample.question,
       sample_answer: sample.answer,
-      message: `${cards.length} flashcards were generated from "${filename}". Choose a folder to save them.`,
+      message,
       filename,
       source_type: sourceType,
+      warning: extracted.warning,
+      extraction_method: extracted.method,
     };
   },
 
@@ -208,55 +219,69 @@ export const localBackend = {
     return { flashcard, subject, stats };
   },
 
-  async getQuiz(subjectId: number): Promise<QuizQuestion[]> {
+  async getQuiz(subjectId: number | number[]): Promise<QuizQuestion[]> {
+    const { buildQuizQuestions } = await import('./quizBuilder');
     const db = await loadLocalDb();
-    if (!db.subjects.some((s) => s.id === subjectId)) {
-      throw new Error('Subject not found');
-    }
-    const cards = db.flashcards[String(subjectId)] ?? [];
-    if (!cards.length) return [];
+    const ids = (Array.isArray(subjectId) ? subjectId : [subjectId]).filter(
+      (id) => db.subjects.some((s) => s.id === id),
+    );
+    if (!ids.length) throw new Error('Subject not found');
 
-    const distractors = [...DISTRACTORS];
-    return cards.slice(0, 8).map((card) => {
-      const question: QuizQuestion = {
-        id: card.id,
-        question: card.question,
-        options: [card.answer, ...distractors.slice(0, 3)],
-        correct_index: 0,
-      };
-      distractors.push(distractors.shift()!);
-      return question;
-    });
+    const cards = ids.flatMap((id) => db.flashcards[String(id)] ?? []);
+    return buildQuizQuestions(cards, 20);
   },
 
   async submitQuiz(
-    subjectId: number,
+    subjectId: number | number[],
     answers: Record<number, number>,
+    questions: QuizQuestion[],
   ): Promise<QuizResult> {
     let result!: QuizResult;
+    const ids = Array.isArray(subjectId) ? subjectId : [subjectId];
 
     await updateLocalDb((db) => {
-      const subject = db.subjects.find((s) => s.id === subjectId);
-      if (!subject) throw new Error('Subject not found');
-      const cards = db.flashcards[String(subjectId)] ?? [];
-      if (!cards.length || !Object.keys(answers).length) {
-        throw new Error('No quiz answers to grade');
-      }
+      const subjects = db.subjects.filter((s) => ids.includes(s.id));
+      if (!subjects.length) throw new Error('Subject not found');
+      if (!questions.length) throw new Error('No quiz questions to grade');
 
-      let score = 0;
-      for (const [cardId, answerIndex] of Object.entries(answers)) {
-        if (answerIndex === 0) {
-          score += 1;
-          const card = cards.find((c) => c.id === Number(cardId));
+      const reviews = questions.map((q) => {
+        const selectedIndex =
+          answers[q.id] === undefined ? null : Number(answers[q.id]);
+        const isCorrect =
+          selectedIndex !== null && selectedIndex === q.correct_index;
+        return {
+          id: q.id,
+          question: q.question,
+          options: q.options,
+          selected_index: selectedIndex,
+          correct_index: q.correct_index,
+          is_correct: isCorrect,
+          correct_answer: q.options[q.correct_index] ?? '',
+          selected_answer:
+            selectedIndex === null ? null : (q.options[selectedIndex] ?? null),
+        };
+      });
+
+      const score = reviews.filter((r) => r.is_correct).length;
+      const total = reviews.length;
+      const percentage = total ? Math.round((score / total) * 100) : 0;
+
+      for (const review of reviews) {
+        if (!review.is_correct) continue;
+        for (const id of ids) {
+          const card = (db.flashcards[String(id)] ?? []).find(
+            (c) => c.id === review.id,
+          );
           if (card) card.mastered = true;
         }
       }
 
-      const total = Object.keys(answers).length;
-      const percentage = Math.round((score / total) * 100);
-      subject.mastered = recountMastered(cards);
-      subject.cards = cards.length;
-      subject.last = 'Just now';
+      for (const subject of subjects) {
+        const cards = db.flashcards[String(subject.id)] ?? [];
+        subject.mastered = recountMastered(cards);
+        subject.cards = cards.length;
+        subject.last = 'Just now';
+      }
 
       const taken = db.progress.quizzes_taken;
       if (taken === 0) db.progress.quiz_average = percentage;
@@ -265,7 +290,7 @@ export const localBackend = {
 
       db.quizzes.push({
         id: db.quizzes.length + 1,
-        subject_id: subjectId,
+        subject_id: ids[0],
         score,
         total,
         percentage,
@@ -278,7 +303,7 @@ export const localBackend = {
         message = 'Solid effort. Review the missed cards and try again.';
       else message = 'Keep going! Study the flashcards, then retake the quiz.';
 
-      result = { score, total, percentage, message };
+      result = { score, total, percentage, message, reviews };
     });
 
     return result;
@@ -299,51 +324,20 @@ export const localBackend = {
     return stats;
   },
 
-  async askTutor(message: string, subject?: string): Promise<TutorReply> {
-    const topic = subject || 'your studies';
-    const text = message.trim();
-    if (!text) {
-      return {
-        reply: "Ask me anything about your notes — I'll break it down step by step.",
-      };
-    }
-
-    const lower = text.toLowerCase();
-    if (lower.includes('flashcard') || lower.includes('card')) {
-      return {
-        reply:
-          `For ${topic}, start with active recall: hide the answer, say it out loud, ` +
-          'then check. Spaced repetition beats rereading every time.',
-      };
-    }
-    if (lower.includes('quiz') || lower.includes('test')) {
-      return {
-        reply:
-          `Before a quiz on ${topic}, do a quick warm-up: 5 flashcards you got wrong last time, ` +
-          'then one timed practice set. Review only the misses afterward.',
-      };
-    }
-    if (lower.includes('explain') || lower.includes('how') || lower.includes('what')) {
-      return {
-        reply:
-          `Let's break that down for ${topic}.\n\n` +
-          '1) Restate the question in your own words.\n' +
-          `2) Identify the core idea behind: "${text}".\n` +
-          '3) Connect it to one example you already know.\n' +
-          '4) Teach it back in one sentence.\n\n' +
-          'Want a worked example next?',
-      };
-    }
-
-    return {
-      reply:
-        `Here's a study plan for ${topic} based on your question:\n\n` +
-        `• Clarify: "${text}"\n` +
-        '• Study 10 focused minutes with flashcards\n' +
-        '• Explain the idea out loud (Voice Explain)\n' +
-        '• Take a short quiz to lock it in\n\n' +
-        "Ask a follow-up and I'll go deeper step by step.",
-    };
+  async askTutor(
+    message: string,
+    subject?: string,
+    history?: { role: 'user' | 'assistant'; text: string }[],
+  ): Promise<TutorReply> {
+    const { answerTutorQuestion } = await import('./tutorEngine');
+    const db = await loadLocalDb();
+    return answerTutorQuestion({
+      message,
+      subject,
+      history,
+      subjects: db.subjects,
+      flashcardsBySubject: db.flashcards,
+    });
   },
 
   async getSettings() {

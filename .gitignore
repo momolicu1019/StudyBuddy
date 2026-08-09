@@ -9,3 +9,5 @@ web-build/
 backend/data/
 *.log
 .DS_Store
+.env
+mobile/.env

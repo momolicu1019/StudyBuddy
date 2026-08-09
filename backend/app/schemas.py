@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
 
@@ -36,17 +34,45 @@ class FlashcardCreate(BaseModel):
     answer: str
 
 
-class GenerateRequest(BaseModel):
-    subject_id: int
-    source_type: Literal["pdf", "photo"]
-    filename: str = "notes"
+class DraftFlashcard(BaseModel):
+    question: str
+    answer: str
 
 
-class GenerateResponse(BaseModel):
-    count: int
+class Stats(BaseModel):
+    flashcards_reviewed: int
+    quiz_average: int
+    focus_hours: float
+
+
+class FlashcardReview(BaseModel):
+    mastered: bool
+
+
+class ReviewResponse(BaseModel):
+    flashcard: Flashcard
     subject: Subject
+    stats: Stats
+
+
+class GenerateDraftResponse(BaseModel):
+    count: int
+    cards: list[DraftFlashcard]
     sample_question: str
     sample_answer: str
+    message: str
+    filename: str
+    source_type: str
+
+
+class SaveFlashcardsRequest(BaseModel):
+    subject_id: int
+    cards: list[DraftFlashcard] = Field(min_length=1)
+
+
+class SaveFlashcardsResponse(BaseModel):
+    count: int
+    subject: Subject
     message: str
 
 
@@ -76,12 +102,6 @@ class TutorMessage(BaseModel):
 
 class TutorReply(BaseModel):
     reply: str
-
-
-class Stats(BaseModel):
-    flashcards_reviewed: int
-    quiz_average: int
-    focus_hours: float
 
 
 class FocusSession(BaseModel):

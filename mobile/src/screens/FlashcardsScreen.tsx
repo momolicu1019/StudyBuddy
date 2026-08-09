@@ -72,9 +72,13 @@ export function FlashcardsScreen() {
     setFolderModal(false);
   }
 
-  if (selected) {
-    const pct = selected.cards
-      ? Math.round((selected.mastered / selected.cards) * 100)
+  const liveSelected = selected
+    ? subjects.find((s) => s.id === selected.id) ?? null
+    : null;
+
+  if (liveSelected) {
+    const pct = liveSelected.cards
+      ? Math.round((liveSelected.mastered / liveSelected.cards) * 100)
       : 0;
     return (
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
@@ -83,19 +87,23 @@ export function FlashcardsScreen() {
         </Pressable>
         <Card>
           <View style={styles.detailHead}>
-            <IconBubble size={64}>{selected.icon}</IconBubble>
+            <IconBubble size={64}>{liveSelected.icon}</IconBubble>
             <View style={{ flex: 1 }}>
-              <Text style={styles.h1}>{selected.name}</Text>
-              <Text style={styles.sub}>Your {selected.name} study deck</Text>
+              <Text style={styles.h1}>{liveSelected.name}</Text>
+              <Text style={styles.sub}>
+                {liveSelected.cards === 0
+                  ? 'No flashcards yet — upload notes from the Dashboard.'
+                  : `Your ${liveSelected.name} study deck`}
+              </Text>
             </View>
           </View>
           <View style={styles.statRow}>
             <View style={styles.statPill}>
-              <Text style={styles.statStrong}>{selected.cards}</Text>
+              <Text style={styles.statStrong}>{liveSelected.cards}</Text>
               <Text style={styles.statSpan}>Flashcards</Text>
             </View>
             <View style={styles.statPill}>
-              <Text style={styles.statStrong}>{selected.mastered}</Text>
+              <Text style={styles.statStrong}>{liveSelected.mastered}</Text>
               <Text style={styles.statSpan}>Mastered</Text>
             </View>
             <View style={styles.statPill}>
@@ -106,18 +114,22 @@ export function FlashcardsScreen() {
           <View style={styles.actions}>
             <PrimaryButton
               label="Study Flashcards"
-              onPress={() => navigation.navigate('Study', { subjectId: selected.id })}
+              onPress={() =>
+                navigation.navigate('Study', { subjectId: liveSelected.id })
+              }
             />
             <PrimaryButton
               label="Quiz This Subject"
               variant="secondary"
-              onPress={() => navigation.navigate('Quiz', { subjectId: selected.id })}
+              onPress={() =>
+                navigation.navigate('Quiz', { subjectId: liveSelected.id })
+              }
             />
             <PrimaryButton
               label="Ask AI Tutor"
               variant="secondary"
               onPress={() =>
-                navigation.navigate('AITutor', { subject: selected.name })
+                navigation.navigate('AITutor', { subject: liveSelected.name })
               }
             />
           </View>
@@ -146,7 +158,9 @@ export function FlashcardsScreen() {
         <View style={styles.grid}>
           {filtered.length === 0 ? (
             <View style={styles.empty}>
-              <Text style={styles.sub}>No subject folders found.</Text>
+              <Text style={styles.sub}>
+                No subject folders yet. Create one, then upload a PDF or photo.
+              </Text>
               <PrimaryButton
                 label="+ Create Subject"
                 onPress={() => openFolderModal()}
@@ -168,7 +182,9 @@ export function FlashcardsScreen() {
                   </View>
                   <Text style={styles.folderName}>{s.name}</Text>
                   <Text style={styles.sub}>
-                    {s.cards} flashcards · {pct}% mastered
+                    {s.cards === 0
+                      ? 'No flashcards yet'
+                      : `${s.cards} flashcards · ${pct}% mastered`}
                   </Text>
                   <ProgressBar value={pct} />
                   <View style={styles.folderActions}>

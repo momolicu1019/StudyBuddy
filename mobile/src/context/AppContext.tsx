@@ -8,7 +8,13 @@ import React, {
 } from 'react';
 
 import { api } from '../api/client';
-import type { GenerateResponse, Stats, Subject } from '../api/types';
+import type {
+  DraftFlashcard,
+  GenerateDraftResponse,
+  SaveFlashcardsResponse,
+  Stats,
+  Subject,
+} from '../api/types';
 
 type ToastState = { message: string; visible: boolean };
 
@@ -19,34 +25,47 @@ type AppContextValue = {
   toast: ToastState;
   showToast: (message: string) => void;
   refresh: () => Promise<void>;
-  createSubject: (name: string, icon: string) => Promise<void>;
+  createSubject: (name: string, icon: string) => Promise<Subject>;
   updateSubject: (id: number, name: string, icon: string) => Promise<void>;
   deleteSubject: (id: number) => Promise<void>;
   generateFromSource: (
-    subjectId: number,
     sourceType: 'pdf' | 'photo',
     filename: string,
-  ) => Promise<GenerateResponse>;
+    uri?: string,
+  ) => Promise<GenerateDraftResponse>;
+  saveDraftFlashcards: (
+    subjectId: number,
+    cards: DraftFlashcard[],
+  ) => Promise<SaveFlashcardsResponse>;
+  applySubjectUpdate: (subject: Subject) => void;
   setStats: (stats: Stats) => void;
 };
 
-const defaultStats: Stats = {
-  flashcards_reviewed: 128,
-  quiz_average: 82,
-  focus_hours: 4.5,
+const emptyStats: Stats = {
+  flashcards_reviewed: 0,
+  quiz_average: 0,
+  focus_hours: 0,
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [stats, setStats] = useState<Stats>(defaultStats);
+  const [stats, setStats] = useState<Stats>(emptyStats);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<ToastState>({ message: '', visible: false });
 
   const showToast = useCallback((message: string) => {
     setToast({ message, visible: true });
     setTimeout(() => setToast((t) => ({ ...t, visible: false })), 2200);
+  }, []);
+
+  const applySubjectUpdate = useCallback((subject: Subject) => {
+    setSubjects((prev) => {
+      const exists = prev.some((s) => s.id === subject.id);
+      if (!exists) return [...prev, subject];
+      return prev.map((s) => (s.id === subject.id ? subject : s));
+    });
   }, []);
 
   const refresh = useCallback(async () => {
@@ -57,18 +76,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ]);
       setSubjects(subjectList);
       setStats(nextStats);
-    } catch {
-      // Offline / backend not running — keep local defaults so UI still works.
-      setSubjects((prev) =>
-        prev.length
-          ? prev
-          : [
-              { id: 1, name: 'Mathematics', icon: '➗', cards: 32, mastered: 24, last: 'Today' },
-              { id: 2, name: 'Science', icon: '🔬', cards: 48, mastered: 36, last: 'Yesterday' },
-              { id: 3, name: 'English', icon: '📖', cards: 21, mastered: 15, last: '2 days ago' },
-              { id: 4, name: 'History', icon: '🌎', cards: 27, mastered: 18, last: 'Friday' },
-            ],
-      );
     } finally {
       setLoading(false);
     }
@@ -80,38 +87,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const createSubject = useCallback(
     async (name: string, icon: string) => {
-      try {
-        const created = await api.createSubject(name, icon);
-        setSubjects((prev) => [...prev, created]);
-        showToast('Subject created');
-      } catch {
-        const local: Subject = {
-          id: Date.now(),
-          name,
-          icon,
-          cards: 0,
-          mastered: 0,
-          last: 'Not studied yet',
-        };
-        setSubjects((prev) => [...prev, local]);
-        showToast('Subject created');
-      }
+      const created = await api.createSubject(name, icon);
+      setSubjects((prev) => [...prev, created]);
+      showToast('Folder created');
+      return created;
     },
     [showToast],
   );
 
   const updateSubject = useCallback(
     async (id: number, name: string, icon: string) => {
-      try {
-        const updated = await api.updateSubject(id, name, icon);
-        setSubjects((prev) => prev.map((s) => (s.id === id ? updated : s)));
-        showToast('Subject renamed');
-      } catch {
-        setSubjects((prev) =>
-          prev.map((s) => (s.id === id ? { ...s, name, icon } : s)),
-        );
-        showToast('Subject renamed');
-      }
+      const updated = await api.updateSubject(id, name, icon);
+      setSubjects((prev) => prev.map((s) => (s.id === id ? updated : s)));
+      showToast('Folder renamed');
     },
     [showToast],
   );
@@ -119,11 +107,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const deleteSubject = useCallback(
     async (id: number) => {
       const target = subjects.find((s) => s.id === id);
-      try {
-        await api.deleteSubject(id);
-      } catch {
-        // local fallback
-      }
+      await api.deleteSubject(id);
       setSubjects((prev) => prev.filter((s) => s.id !== id));
       showToast(target ? `"${target.name}" deleted` : 'Folder deleted');
     },
@@ -131,41 +115,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const generateFromSource = useCallback(
-    async (subjectId: number, sourceType: 'pdf' | 'photo', filename: string) => {
-      try {
-        const result = await api.generateFlashcards(subjectId, sourceType, filename);
-        setSubjects((prev) =>
-          prev.map((s) => (s.id === subjectId ? result.subject : s)),
-        );
-        const nextStats = await api.getStats();
-        setStats(nextStats);
-        return result;
-      } catch {
-        const count = sourceType === 'photo' ? 12 : 24;
-        let updatedSubject: Subject | undefined;
-        setSubjects((prev) =>
-          prev.map((s) => {
-            if (s.id !== subjectId) return s;
-            updatedSubject = {
-              ...s,
-              cards: s.cards + count,
-              mastered: Math.min(s.cards + count, s.mastered + Math.floor(count * 0.2)),
-              last: 'Just now',
-            };
-            return updatedSubject;
-          }),
-        );
-        return {
-          count,
-          subject: updatedSubject!,
-          sample_question: 'What is one key concept from the uploaded notes?',
-          sample_answer:
-            'The AI-generated answer will be based on the content of your PDF or note photo.',
-          message: `${count} new flashcards were created from "${filename}".`,
-        };
-      }
+    async (sourceType: 'pdf' | 'photo', filename: string, uri?: string) => {
+      return api.generateFlashcards(sourceType, filename, uri);
     },
     [],
+  );
+
+  const saveDraftFlashcards = useCallback(
+    async (subjectId: number, cards: DraftFlashcard[]) => {
+      const result = await api.saveFlashcards(subjectId, cards);
+      applySubjectUpdate(result.subject);
+      return result;
+    },
+    [applySubjectUpdate],
   );
 
   const value = useMemo(
@@ -180,6 +142,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateSubject,
       deleteSubject,
       generateFromSource,
+      saveDraftFlashcards,
+      applySubjectUpdate,
       setStats,
     }),
     [
@@ -193,6 +157,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateSubject,
       deleteSubject,
       generateFromSource,
+      saveDraftFlashcards,
+      applySubjectUpdate,
     ],
   );
 

@@ -1,4 +1,5 @@
 export type RootStackParamList = {
+  Login: undefined;
   MainTabs: undefined;
   Study: { subjectId: number };
   Quiz: { subjectId?: number };

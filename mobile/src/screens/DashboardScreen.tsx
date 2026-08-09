@@ -11,7 +11,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
-import type { GenerateResponse, Subject } from '../api/types';
+import type { GenerateDraftResponse, Subject } from '../api/types';
 import {
   AppModal,
   Card,
@@ -26,6 +26,12 @@ import { colors } from '../theme/colors';
 
 const FOLDER_ICONS = ['📚', '🧬', '🔬', '➗', '🌎', '📖', '💻', '🎨'];
 
+type SelectedSource = {
+  name: string;
+  type: 'pdf' | 'photo';
+  uri: string;
+};
+
 export function DashboardScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const {
@@ -35,16 +41,18 @@ export function DashboardScreen() {
     createSubject,
     updateSubject,
     generateFromSource,
+    saveDraftFlashcards,
   } = useApp();
 
   const [search, setSearch] = useState('');
-  const [selectedSource, setSelectedSource] = useState<{
-    name: string;
-    type: 'pdf' | 'photo';
-  } | null>(null);
-  const [selectedSubjectId, setSelectedSubjectId] = useState<number | null>(null);
+  const [selectedSource, setSelectedSource] = useState<SelectedSource | null>(null);
   const [generating, setGenerating] = useState(false);
-  const [generation, setGeneration] = useState<GenerateResponse | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [draft, setDraft] = useState<GenerateDraftResponse | null>(null);
+  const [saveFolderId, setSaveFolderId] = useState<number | null>(null);
+  const [savedSubject, setSavedSubject] = useState<Subject | null>(null);
+
   const [folderModal, setFolderModal] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [folderIcon, setFolderIcon] = useState('📚');
@@ -57,7 +65,15 @@ export function DashboardScreen() {
     return subjects.filter((s) => s.name.toLowerCase().includes(q));
   }, [subjects, search]);
 
-  const activeSubjectId = selectedSubjectId ?? subjects[0]?.id ?? null;
+  const livePreview = preview
+    ? subjects.find((s) => s.id === preview.id) ?? preview
+    : null;
+
+  const hasProgress =
+    stats.flashcards_reviewed > 0 ||
+    stats.quiz_average > 0 ||
+    stats.focus_hours > 0 ||
+    subjects.some((s) => s.cards > 0);
 
   async function pickPdf() {
     const result = await DocumentPicker.getDocumentAsync({
@@ -65,33 +81,53 @@ export function DashboardScreen() {
       copyToCacheDirectory: true,
     });
     if (result.canceled || !result.assets?.[0]) return;
-    setSelectedSource({ name: result.assets[0].name, type: 'pdf' });
-    showToast('PDF ready!');
+    const asset = result.assets[0];
+    setSelectedSource({ name: asset.name, type: 'pdf', uri: asset.uri });
+    setDraft(null);
+    setSavedSubject(null);
+    showToast('PDF ready — tap Generate Flashcards');
   }
 
   async function pickPhoto() {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      const library = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
+    const camera = await ImagePicker.requestCameraPermissionsAsync();
+    if (camera.granted) {
+      const photo = await ImagePicker.launchCameraAsync({
         quality: 0.8,
+        allowsEditing: false,
       });
-      if (library.canceled || !library.assets?.[0]) return;
+      if (photo.canceled || !photo.assets?.[0]) return;
+      const asset = photo.assets[0];
       setSelectedSource({
-        name: library.assets[0].fileName ?? 'note-photo.jpg',
+        name: asset.fileName ?? 'note-photo.jpg',
         type: 'photo',
+        uri: asset.uri,
       });
-      showToast('Note photo ready!');
+      setDraft(null);
+      setSavedSubject(null);
+      showToast('Photo ready — tap Generate Flashcards');
       return;
     }
 
-    const photo = await ImagePicker.launchCameraAsync({ quality: 0.8 });
-    if (photo.canceled || !photo.assets?.[0]) return;
-    setSelectedSource({
-      name: photo.assets[0].fileName ?? 'note-photo.jpg',
-      type: 'photo',
+    const libraryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!libraryPermission.granted) {
+      showToast('Camera or photo library permission is required');
+      return;
+    }
+
+    const library = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
     });
-    showToast('Note photo ready!');
+    if (library.canceled || !library.assets?.[0]) return;
+    const asset = library.assets[0];
+    setSelectedSource({
+      name: asset.fileName ?? 'note-photo.jpg',
+      type: 'photo',
+      uri: asset.uri,
+    });
+    setDraft(null);
+    setSavedSubject(null);
+    showToast('Photo ready — tap Generate Flashcards');
   }
 
   async function onGenerate() {
@@ -99,24 +135,25 @@ export function DashboardScreen() {
       showToast('Upload a PDF or take a photo first');
       return;
     }
-    if (!activeSubjectId) {
-      showToast('Please create a subject first');
-      return;
-    }
     setGenerating(true);
     try {
       const result = await generateFromSource(
-        activeSubjectId,
         selectedSource.type,
         selectedSource.name,
+        selectedSource.uri,
       );
-      setGeneration(result);
+      setDraft(result);
+      setSaveFolderId(subjects[0]?.id ?? null);
+      setSelectedSource(null);
+      showToast(`${result.count} flashcards ready to save`);
+    } catch {
+      showToast('Could not generate flashcards. Please try again.');
     } finally {
       setGenerating(false);
     }
   }
 
-  function openCreateFolder(subject?: Subject) {
+  function openManageFolder(subject?: Subject) {
     if (subject) {
       setEditingId(subject.id);
       setFolderName(subject.name);
@@ -126,21 +163,65 @@ export function DashboardScreen() {
       setFolderName('');
       setFolderIcon('📚');
     }
+    setCreatingFolder(false);
     setFolderModal(true);
+  }
+
+  function startInlineCreateFolder() {
+    setFolderName('');
+    setFolderIcon('📚');
+    setCreatingFolder(true);
+  }
+
+  async function createFolderInline() {
+    const name = folderName.trim();
+    if (!name) {
+      showToast('Please enter a folder name');
+      return;
+    }
+    setCreatingFolder(false);
+    const created = await createSubject(name, folderIcon);
+    setSaveFolderId(created.id);
+    setFolderName('');
+    setFolderIcon('📚');
   }
 
   async function saveFolder() {
     const name = folderName.trim();
     if (!name) {
-      showToast('Please enter a subject name');
+      showToast('Please enter a folder name');
       return;
     }
+
     if (editingId) {
       await updateSubject(editingId, name, folderIcon);
     } else {
       await createSubject(name, folderIcon);
     }
     setFolderModal(false);
+  }
+
+  async function onSaveDraft() {
+    if (!draft) return;
+    if (!saveFolderId) {
+      showToast('Create or select a folder first');
+      startInlineCreateFolder();
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await saveDraftFlashcards(saveFolderId, draft.cards);
+      setSavedSubject(result.subject);
+      setPreview(result.subject);
+      setDraft(null);
+      setSaveFolderId(null);
+      showToast(result.message);
+    } catch {
+      showToast('Could not save flashcards. Try again.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -162,7 +243,7 @@ export function DashboardScreen() {
           <IconBubble size={58}>📚</IconBubble>
           <Text style={styles.uploadTitle}>Create flashcards from your notes</Text>
           <Text style={styles.subCenter}>
-            Upload a PDF or take a photo of handwritten/printed notes.
+            Upload a PDF or take a photo, generate flashcards, then save them to a folder.
           </Text>
           <View style={styles.row}>
             <PrimaryButton label="📄 Upload PDF" onPress={pickPdf} style={styles.flexBtn} />
@@ -179,37 +260,25 @@ export function DashboardScreen() {
               <Text style={styles.sourceName}>{selectedSource.name}</Text>
               <Text style={styles.sub}>
                 {selectedSource.type === 'photo'
-                  ? '📷 Note photo selected — AI will read the notes and create study cards.'
-                  : '📄 PDF selected — AI will extract the key concepts and create study cards.'}
+                  ? '📷 Photo selected. Generate flashcards from this image.'
+                  : '📄 PDF selected. Generate flashcards from this document.'}
               </Text>
-              <Text style={[styles.sub, { marginTop: 10, marginBottom: 6 }]}>
-                Save to subject
-              </Text>
-              <View style={styles.subjectChips}>
-                {subjects.map((s) => (
-                  <Pressable
-                    key={s.id}
-                    onPress={() => setSelectedSubjectId(s.id)}
-                    style={[
-                      styles.chip,
-                      activeSubjectId === s.id && styles.chipActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.chipText,
-                        activeSubjectId === s.id && styles.chipTextActive,
-                      ]}
-                    >
-                      {s.icon} {s.name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
               <PrimaryButton
-                label={generating ? '✨ Generating…' : '✨ Generate Flashcards'}
+                label={
+                  generating
+                    ? '✨ Generating…'
+                    : selectedSource.type === 'photo'
+                      ? '✨ Generate Flashcard'
+                      : '✨ Generate Flashcards'
+                }
                 onPress={onGenerate}
                 style={{ marginTop: 12 }}
+              />
+              <PrimaryButton
+                label="Clear selection"
+                variant="secondary"
+                onPress={() => setSelectedSource(null)}
+                style={{ marginTop: 8 }}
               />
             </View>
           )}
@@ -219,25 +288,30 @@ export function DashboardScreen() {
           <View style={styles.flashHead}>
             <View style={{ flex: 1 }}>
               <Text style={styles.h2}>📚 My Flashcards</Text>
-              <Text style={styles.sub}>Organize your cards by subject and topic.</Text>
+              <Text style={styles.sub}>
+                Saved flashcard folders appear here after you generate and save.
+              </Text>
             </View>
           </View>
           <View style={styles.tools}>
             <SearchInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Search subjects..."
+              placeholder="Search folders..."
             />
-            <PrimaryButton label="+ New" onPress={() => openCreateFolder()} />
+            <PrimaryButton label="+ New" onPress={() => openManageFolder()} />
           </View>
 
           <View style={styles.subjects}>
             {filtered.length === 0 ? (
               <View style={styles.empty}>
-                <Text style={styles.sub}>No subjects found.</Text>
+                <Text style={styles.sub}>
+                  No flashcard folders yet. Upload notes, generate cards, then create a
+                  folder to save them.
+                </Text>
                 <PrimaryButton
-                  label="Create a subject"
-                  onPress={() => openCreateFolder()}
+                  label="Create a folder"
+                  onPress={() => openManageFolder()}
                   style={{ marginTop: 12 }}
                 />
               </View>
@@ -248,15 +322,12 @@ export function DashboardScreen() {
                   <Pressable
                     key={s.id}
                     style={styles.subject}
-                    onPress={() => {
-                      setPreview(s);
-                      showToast(`${s.name} opened`);
-                    }}
+                    onPress={() => setPreview(s)}
                   >
                     <View style={styles.subjectTop}>
                       <IconBubble>{s.icon}</IconBubble>
                       <Pressable
-                        onPress={() => openCreateFolder(s)}
+                        onPress={() => openManageFolder(s)}
                         style={styles.menuBtn}
                       >
                         <Text style={{ color: colors.muted }}>⋯</Text>
@@ -264,7 +335,9 @@ export function DashboardScreen() {
                     </View>
                     <Text style={styles.subjectName}>{s.name}</Text>
                     <Text style={styles.sub}>
-                      {s.cards} flashcards · {pct}% mastered
+                      {s.cards === 0
+                        ? 'No flashcards yet'
+                        : `${s.cards} flashcards · ${pct}% mastered`}
                     </Text>
                     <ProgressBar value={pct} />
                   </Pressable>
@@ -273,27 +346,30 @@ export function DashboardScreen() {
             )}
           </View>
 
-          {preview && (
+          {livePreview && (
             <View style={styles.preview}>
               <Text style={styles.previewTitle}>
-                {preview.icon} {preview.name}
+                {livePreview.icon} {livePreview.name}
               </Text>
               <Text style={styles.sub}>
-                {preview.cards} flashcards ready · {preview.mastered} mastered · Last
-                studied {preview.last}.
+                {livePreview.cards === 0
+                  ? 'No flashcards yet — generate from a PDF or photo, then save here.'
+                  : `${livePreview.cards} flashcards ready · ${livePreview.mastered} mastered · Last studied ${livePreview.last}.`}
               </Text>
               <View style={[styles.row, { marginTop: 11 }]}>
                 <PrimaryButton
                   label="Study"
                   onPress={() =>
-                    navigation.navigate('Study', { subjectId: preview.id })
+                    navigation.navigate('Study', { subjectId: livePreview.id })
                   }
                   style={styles.flexBtn}
                 />
                 <PrimaryButton
                   label="Quiz"
                   variant="secondary"
-                  onPress={() => navigation.navigate('Quiz', { subjectId: preview.id })}
+                  onPress={() =>
+                    navigation.navigate('Quiz', { subjectId: livePreview.id })
+                  }
                   style={styles.flexBtn}
                 />
               </View>
@@ -342,6 +418,14 @@ export function DashboardScreen() {
         <Text style={[styles.h2, { marginTop: 8, marginBottom: 14 }]}>
           Your study progress
         </Text>
+        {!hasProgress ? (
+          <Card style={{ marginBottom: 8 }}>
+            <Text style={styles.sub}>
+              Progress appears after you upload notes, study flashcards, take a quiz,
+              or finish a focus session.
+            </Text>
+          </Card>
+        ) : null}
         <View style={styles.stats}>
           <Card style={styles.stat}>
             <Text style={styles.statValue}>{stats.flashcards_reviewed}</Text>
@@ -369,28 +453,136 @@ export function DashboardScreen() {
         </Card>
       </ScrollView>
 
-      <AppModal visible={!!generation} onClose={() => setGeneration(null)}>
+      <AppModal
+        visible={!!draft}
+        onClose={() => {
+          setDraft(null);
+          setSaveFolderId(null);
+          setCreatingFolder(false);
+        }}
+      >
         <Text style={styles.h2}>✨ Flashcards generated!</Text>
-        <Text style={[styles.sub, { marginTop: 8 }]}>{generation?.message}</Text>
+        <Text style={[styles.sub, { marginTop: 8 }]}>{draft?.message}</Text>
         <View style={styles.sample}>
-          <Text style={{ fontWeight: '700', color: colors.ink }}>Sample flashcard</Text>
-          <Text style={{ marginTop: 10, fontWeight: '700' }}>
-            {generation?.sample_question}
+          <Text style={{ fontWeight: '700', color: colors.ink }}>
+            Sample · {draft?.count ?? 0} cards ready
           </Text>
-          <Text style={[styles.sub, { marginTop: 6 }]}>{generation?.sample_answer}</Text>
+          <Text style={{ marginTop: 10, fontWeight: '700' }}>
+            {draft?.sample_question}
+          </Text>
+          <Text style={[styles.sub, { marginTop: 6 }]}>{draft?.sample_answer}</Text>
         </View>
+
+        <Text style={[styles.sub, { marginTop: 16, marginBottom: 8, fontWeight: '700' }]}>
+          Save to folder
+        </Text>
+
+        {creatingFolder || subjects.length === 0 ? (
+          <View style={styles.inlineEmpty}>
+            <Text style={styles.sub}>
+              {subjects.length === 0
+                ? 'No folders yet. Create one to save these flashcards.'
+                : 'Name your new folder.'}
+            </Text>
+            <SearchInput
+              value={folderName}
+              onChangeText={setFolderName}
+              placeholder="e.g. Biology"
+            />
+            <View style={[styles.subjectChips, { marginTop: 12 }]}>
+              {FOLDER_ICONS.map((icon) => (
+                <Pressable
+                  key={icon}
+                  onPress={() => setFolderIcon(icon)}
+                  style={[styles.chip, folderIcon === icon && styles.chipActive]}
+                >
+                  <Text style={{ fontSize: 18 }}>{icon}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={[styles.row, { marginTop: 12 }]}>
+              {subjects.length > 0 ? (
+                <PrimaryButton
+                  label="Back"
+                  variant="secondary"
+                  onPress={() => setCreatingFolder(false)}
+                  style={styles.flexBtn}
+                />
+              ) : null}
+              <PrimaryButton
+                label="Create folder"
+                onPress={createFolderInline}
+                style={styles.flexBtn}
+              />
+            </View>
+          </View>
+        ) : (
+          <>
+            <View style={styles.subjectChips}>
+              {subjects.map((s) => (
+                <Pressable
+                  key={s.id}
+                  onPress={() => setSaveFolderId(s.id)}
+                  style={[styles.chip, saveFolderId === s.id && styles.chipActive]}
+                >
+                  <Text
+                    style={[
+                      styles.chipText,
+                      saveFolderId === s.id && styles.chipTextActive,
+                    ]}
+                  >
+                    {s.icon} {s.name}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <PrimaryButton
+              label="+ New folder"
+              variant="secondary"
+              onPress={startInlineCreateFolder}
+              style={{ marginTop: 10 }}
+            />
+          </>
+        )}
+
+        <View style={[styles.row, { marginTop: 20 }]}>
+          <PrimaryButton
+            label="Discard"
+            variant="secondary"
+            onPress={() => {
+              setDraft(null);
+              setSaveFolderId(null);
+              setCreatingFolder(false);
+            }}
+            style={styles.flexBtn}
+          />
+          <PrimaryButton
+            label={saving ? 'Saving…' : 'Save flashcards'}
+            onPress={onSaveDraft}
+            style={styles.flexBtn}
+          />
+        </View>
+      </AppModal>
+
+      <AppModal visible={!!savedSubject} onClose={() => setSavedSubject(null)}>
+        <Text style={styles.h2}>Saved to My Flashcards</Text>
+        <Text style={[styles.sub, { marginTop: 8 }]}>
+          {savedSubject
+            ? `${savedSubject.icon} ${savedSubject.name} now has ${savedSubject.cards} flashcards.`
+            : ''}
+        </Text>
         <View style={[styles.row, { marginTop: 20 }]}>
           <PrimaryButton
             label="Close"
             variant="secondary"
-            onPress={() => setGeneration(null)}
+            onPress={() => setSavedSubject(null)}
             style={styles.flexBtn}
           />
           <PrimaryButton
             label="Start Studying"
             onPress={() => {
-              const id = generation?.subject.id;
-              setGeneration(null);
+              const id = savedSubject?.id;
+              setSavedSubject(null);
               if (id) navigation.navigate('Study', { subjectId: id });
             }}
             style={styles.flexBtn}
@@ -400,10 +592,10 @@ export function DashboardScreen() {
 
       <AppModal visible={folderModal} onClose={() => setFolderModal(false)}>
         <Text style={styles.h2}>
-          {editingId ? 'Rename subject' : 'Create a subject'}
+          {editingId ? 'Rename folder' : 'Create a folder'}
         </Text>
         <Text style={[styles.sub, { marginTop: 6 }]}>
-          Give your flashcards a subject folder.
+          Organize your flashcards by subject or topic.
         </Text>
         <SearchInput
           value={folderName}
@@ -429,7 +621,7 @@ export function DashboardScreen() {
             style={styles.flexBtn}
           />
           <PrimaryButton
-            label={editingId ? 'Save changes' : 'Create subject'}
+            label={editingId ? 'Save changes' : 'Create folder'}
             onPress={saveFolder}
             style={styles.flexBtn}
           />
@@ -490,6 +682,14 @@ const styles = StyleSheet.create({
   },
   chipText: { color: colors.muted, fontWeight: '600' },
   chipTextActive: { color: colors.primary },
+  inlineEmpty: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#D7D5E7',
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: '#fff',
+  },
   flashHead: { marginBottom: 12 },
   tools: { flexDirection: 'row', gap: 8, marginBottom: 14, alignItems: 'center' },
   subjects: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },

@@ -19,35 +19,28 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Study'>;
 
 export function StudyScreen({ route, navigation }: Props) {
   const { subjectId } = route.params;
-  const { subjects, showToast } = useApp();
+  const { subjects, showToast, applySubjectUpdate, setStats } = useApp();
   const subject = subjects.find((s) => s.id === subjectId);
   const [cards, setCards] = useState<Flashcard[]>([]);
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const data = await api.getFlashcards(subjectId);
-        if (alive) setCards(data);
+        if (alive) {
+          setCards(data);
+          setError(null);
+        }
       } catch {
         if (alive) {
-          setCards([
-            {
-              id: 1,
-              question: `What is a key idea in ${subject?.name ?? 'this subject'}?`,
-              answer: 'Review your notes and explain the concept in your own words.',
-              mastered: false,
-            },
-            {
-              id: 2,
-              question: 'How can you remember this better?',
-              answer: 'Use active recall and spaced repetition with short daily sessions.',
-              mastered: false,
-            },
-          ]);
+          setCards([]);
+          setError('Could not load flashcards from local storage.');
         }
       } finally {
         if (alive) setLoading(false);
@@ -56,7 +49,32 @@ export function StudyScreen({ route, navigation }: Props) {
     return () => {
       alive = false;
     };
-  }, [subjectId, subject?.name]);
+  }, [subjectId]);
+
+  async function reviewCurrent(mastered: boolean) {
+    const card = cards[index];
+    if (!card || saving) return;
+    setSaving(true);
+    try {
+      const result = await api.reviewFlashcard(subjectId, card.id, mastered);
+      setCards((prev) =>
+        prev.map((c) => (c.id === card.id ? result.flashcard : c)),
+      );
+      applySubjectUpdate(result.subject);
+      setStats(result.stats);
+      setFlipped(false);
+      if (index >= cards.length - 1) {
+        showToast('Study session complete!');
+        navigation.goBack();
+        return;
+      }
+      setIndex((i) => i + 1);
+    } catch {
+      showToast('Could not save review. Try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -66,12 +84,25 @@ export function StudyScreen({ route, navigation }: Props) {
     );
   }
 
+  if (error) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.h2}>Unable to load</Text>
+        <Text style={[styles.sub, { marginVertical: 10, textAlign: 'center' }]}>
+          {error}
+        </Text>
+        <PrimaryButton label="Go back" onPress={() => navigation.goBack()} />
+      </View>
+    );
+  }
+
   if (!cards.length) {
     return (
       <View style={styles.center}>
         <Text style={styles.h2}>No flashcards yet</Text>
         <Text style={[styles.sub, { marginVertical: 10, textAlign: 'center' }]}>
-          Generate cards from a PDF or photo on the Dashboard.
+          Upload a PDF or photo on the Dashboard to generate cards for{' '}
+          {subject?.name ?? 'this subject'}.
         </Text>
         <PrimaryButton label="Back to Dashboard" onPress={() => navigation.goBack()} />
       </View>
@@ -94,25 +125,14 @@ export function StudyScreen({ route, navigation }: Props) {
       </Pressable>
       <View style={styles.row}>
         <PrimaryButton
-          label="Previous"
+          label={saving ? 'Saving…' : 'Still learning'}
           variant="secondary"
-          onPress={() => {
-            setFlipped(false);
-            setIndex((i) => Math.max(0, i - 1));
-          }}
+          onPress={() => void reviewCurrent(false)}
           style={{ flex: 1 }}
         />
         <PrimaryButton
-          label={index === cards.length - 1 ? 'Done' : 'Next'}
-          onPress={() => {
-            if (index === cards.length - 1) {
-              showToast('Study session complete! 🎉');
-              navigation.goBack();
-              return;
-            }
-            setFlipped(false);
-            setIndex((i) => i + 1);
-          }}
+          label={saving ? 'Saving…' : 'Got it'}
+          onPress={() => void reviewCurrent(true)}
           style={{ flex: 1 }}
         />
       </View>

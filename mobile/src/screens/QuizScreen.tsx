@@ -28,6 +28,7 @@ export function QuizScreen({ route, navigation }: Props) {
   const [index, setIndex] = useState(0);
   const [result, setResult] = useState<QuizResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!subjectId) {
@@ -38,28 +39,14 @@ export function QuizScreen({ route, navigation }: Props) {
     (async () => {
       try {
         const data = await api.getQuiz(subjectId);
-        if (alive) setQuestions(data);
+        if (alive) {
+          setQuestions(data);
+          setError(null);
+        }
       } catch {
         if (alive) {
-          setQuestions([
-            {
-              id: 1,
-              question: `Which study method helps most for ${subject?.name ?? 'this subject'}?`,
-              options: [
-                'Active recall with flashcards',
-                'Only highlighting notes',
-                'Cramming the night before',
-                'Skipping practice quizzes',
-              ],
-              correct_index: 0,
-            },
-            {
-              id: 2,
-              question: 'How long is a classic Pomodoro focus block?',
-              options: ['25 minutes', '5 minutes', '90 minutes', '2 hours'],
-              correct_index: 0,
-            },
-          ]);
+          setQuestions([]);
+          setError('Could not load quiz from local storage.');
         }
       } finally {
         if (alive) setLoading(false);
@@ -68,7 +55,7 @@ export function QuizScreen({ route, navigation }: Props) {
     return () => {
       alive = false;
     };
-  }, [subjectId, subject?.name]);
+  }, [subjectId]);
 
   async function submit() {
     if (!subjectId) return;
@@ -77,21 +64,7 @@ export function QuizScreen({ route, navigation }: Props) {
       setResult(res);
       await refresh();
     } catch {
-      const total = questions.length || 1;
-      let score = 0;
-      questions.forEach((q) => {
-        if (answers[q.id] === q.correct_index) score += 1;
-      });
-      const percentage = Math.round((score / total) * 100);
-      setResult({
-        score,
-        total,
-        percentage,
-        message:
-          percentage >= 80
-            ? "Great work — you're mastering this subject!"
-            : 'Keep going! Review flashcards and try again.',
-      });
+      showToast('Could not submit quiz. Try again.');
     }
   }
 
@@ -99,6 +72,9 @@ export function QuizScreen({ route, navigation }: Props) {
     return (
       <View style={styles.center}>
         <Text style={styles.h2}>Create a subject first</Text>
+        <Text style={[styles.sub, { textAlign: 'center', marginVertical: 10 }]}>
+          Make a subject folder, upload notes, then come back to quiz.
+        </Text>
         <PrimaryButton
           label="Go to Flashcards"
           onPress={() => navigation.navigate('Flashcards')}
@@ -112,6 +88,35 @@ export function QuizScreen({ route, navigation }: Props) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.h2}>Unable to load</Text>
+        <Text style={[styles.sub, { textAlign: 'center', marginVertical: 10 }]}>
+          {error}
+        </Text>
+        <PrimaryButton label="Go back" onPress={() => navigation.goBack()} />
+      </View>
+    );
+  }
+
+  if (!questions.length) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.h2}>No quiz yet</Text>
+        <Text style={[styles.sub, { textAlign: 'center', marginVertical: 10 }]}>
+          {subject?.name ?? 'This subject'} has no flashcards. Upload a PDF or photo
+          on the Dashboard first.
+        </Text>
+        <PrimaryButton
+          label="Go back"
+          onPress={() => navigation.goBack()}
+          style={{ marginTop: 8 }}
+        />
       </View>
     );
   }
@@ -161,7 +166,7 @@ export function QuizScreen({ route, navigation }: Props) {
             const selected = answers[q.id] === optIndex;
             return (
               <Pressable
-                key={option}
+                key={`${q.id}-${optIndex}`}
                 onPress={() =>
                   setAnswers((prev) => ({ ...prev, [q.id]: optIndex }))
                 }
@@ -202,7 +207,7 @@ export function QuizScreen({ route, navigation }: Props) {
                 showToast('Answer every question first');
                 return;
               }
-              submit();
+              void submit();
             }}
             style={{ flex: 1 }}
           />

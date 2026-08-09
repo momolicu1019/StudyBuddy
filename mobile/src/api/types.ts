@@ -14,18 +14,37 @@ export type Flashcard = {
   mastered: boolean;
 };
 
+export type DraftFlashcard = {
+  question: string;
+  answer: string;
+};
+
 export type Stats = {
   flashcards_reviewed: number;
   quiz_average: number;
   focus_hours: number;
 };
 
-export type GenerateResponse = {
+export type GenerateDraftResponse = {
   count: number;
-  subject: Subject;
+  cards: DraftFlashcard[];
   sample_question: string;
   sample_answer: string;
   message: string;
+  filename: string;
+  source_type: string;
+};
+
+export type SaveFlashcardsResponse = {
+  count: number;
+  subject: Subject;
+  message: string;
+};
+
+export type ReviewResponse = {
+  flashcard: Flashcard;
+  subject: Subject;
+  stats: Stats;
 };
 
 export type QuizQuestion = {

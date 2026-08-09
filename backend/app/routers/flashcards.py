@@ -1,48 +1,117 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.database import load_data, save_data
-from app.schemas import Flashcard, FlashcardCreate, GenerateRequest, GenerateResponse
+from app.schemas import (
+    DraftFlashcard,
+    Flashcard,
+    FlashcardCreate,
+    FlashcardReview,
+    GenerateDraftResponse,
+    ReviewResponse,
+    SaveFlashcardsRequest,
+    SaveFlashcardsResponse,
+    Stats,
+)
 
 router = APIRouter()
 
 
-@router.post("/generate", response_model=GenerateResponse)
-def generate_flashcards(payload: GenerateRequest) -> GenerateResponse:
+def _recount_mastered(cards: list[dict]) -> int:
+    return sum(1 for card in cards if card.get("mastered"))
+
+
+def _public_stats(data: dict) -> Stats:
+    stats = data["stats"]
+    return Stats(
+        flashcards_reviewed=stats.get("flashcards_reviewed", 0),
+        quiz_average=stats.get("quiz_average", 0),
+        focus_hours=stats.get("focus_hours", 0.0),
+    )
+
+
+def _build_draft_cards(source_type: str, filename: str) -> list[DraftFlashcard]:
+    stem = Path(filename).stem.replace("_", " ").replace("-", " ").strip() or "your notes"
+    count = 8 if source_type == "photo" else 12
+    return [
+        DraftFlashcard(
+            question=f"What is key point #{i + 1} from {stem}?",
+            answer=(
+                f"Summarize point #{i + 1} from your {source_type} notes "
+                f"in “{stem}” using your own words."
+            ),
+        )
+        for i in range(count)
+    ]
+
+
+@router.post("/generate", response_model=GenerateDraftResponse)
+async def generate_flashcards(
+    source_type: str = Form(...),
+    filename: str = Form("notes"),
+    file: UploadFile | None = File(None),
+) -> GenerateDraftResponse:
+    """Turn an uploaded PDF/photo into draft flashcards (not saved yet)."""
+    if source_type not in {"pdf", "photo"}:
+        raise HTTPException(status_code=422, detail="source_type must be pdf or photo")
+
+    if file is not None:
+        await file.read()
+        if file.filename:
+            filename = file.filename
+
+    cards = _build_draft_cards(source_type, filename)
+    sample = cards[0]
+    return GenerateDraftResponse(
+        count=len(cards),
+        cards=cards,
+        sample_question=sample.question,
+        sample_answer=sample.answer,
+        message=(
+            f'{len(cards)} flashcards were generated from "{filename}". '
+            "Choose a folder to save them."
+        ),
+        filename=filename,
+        source_type=source_type,
+    )
+
+
+@router.post("/save", response_model=SaveFlashcardsResponse)
+def save_flashcards(payload: SaveFlashcardsRequest) -> SaveFlashcardsResponse:
+    """Persist draft flashcards into a subject folder."""
     data = load_data()
     subject = next((s for s in data["subjects"] if s["id"] == payload.subject_id), None)
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 
-    count = 12 if payload.source_type == "photo" else 24
     key = str(subject["id"])
     data["flashcards"].setdefault(key, [])
 
-    for i in range(count):
-        card = {
-            "id": data["next_card_id"],
-            "question": f"Key concept #{i + 1} from {payload.filename}?",
-            "answer": f"AI-extracted answer based on your {payload.source_type} notes.",
-            "mastered": False,
-        }
+    for draft in payload.cards:
+        data["flashcards"][key].append(
+            {
+                "id": data["next_card_id"],
+                "question": draft.question,
+                "answer": draft.answer,
+                "mastered": False,
+            }
+        )
         data["next_card_id"] += 1
-        data["flashcards"][key].append(card)
 
-    subject["cards"] += count
-    subject["mastered"] = min(subject["cards"], subject["mastered"] + max(1, count // 5))
+    subject["cards"] = len(data["flashcards"][key])
+    subject["mastered"] = _recount_mastered(data["flashcards"][key])
     subject["last"] = "Just now"
-    data["stats"]["flashcards_reviewed"] += count
     save_data(data)
 
-    return GenerateResponse(
+    count = len(payload.cards)
+    return SaveFlashcardsResponse(
         count=count,
         subject=subject,
-        sample_question="What is one key concept from the uploaded notes?",
-        sample_answer="The AI-generated answer will be based on the content of your PDF or note photo.",
         message=(
-            f'{count} new flashcards were created from "{payload.filename}" '
-            f'and saved to {subject["icon"]} {subject["name"]}.'
+            f'{count} flashcards were saved to {subject["icon"]} {subject["name"]}.'
         ),
     )
 
@@ -70,7 +139,41 @@ def create_flashcard(subject_id: int, payload: FlashcardCreate) -> Flashcard:
     }
     data["next_card_id"] += 1
     data["flashcards"].setdefault(str(subject_id), []).append(card)
-    subject["cards"] += 1
+    subject["cards"] = len(data["flashcards"][str(subject_id)])
+    subject["mastered"] = _recount_mastered(data["flashcards"][str(subject_id)])
     subject["last"] = "Just now"
     save_data(data)
     return card
+
+
+@router.post(
+    "/{subject_id}/cards/{card_id}/review",
+    response_model=ReviewResponse,
+)
+def review_flashcard(
+    subject_id: int,
+    card_id: int,
+    payload: FlashcardReview,
+) -> ReviewResponse:
+    data = load_data()
+    subject = next((s for s in data["subjects"] if s["id"] == subject_id), None)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    cards = data["flashcards"].get(str(subject_id), [])
+    card = next((c for c in cards if c["id"] == card_id), None)
+    if not card:
+        raise HTTPException(status_code=404, detail="Flashcard not found")
+
+    card["mastered"] = payload.mastered
+    subject["cards"] = len(cards)
+    subject["mastered"] = _recount_mastered(cards)
+    subject["last"] = "Just now"
+    data["stats"]["flashcards_reviewed"] = data["stats"].get("flashcards_reviewed", 0) + 1
+    save_data(data)
+
+    return ReviewResponse(
+        flashcard=card,
+        subject=subject,
+        stats=_public_stats(data),
+    )

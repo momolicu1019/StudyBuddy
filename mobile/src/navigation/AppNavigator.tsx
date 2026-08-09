@@ -1,5 +1,5 @@
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { NavigationContainer, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -8,9 +8,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Toast } from '../components/ui';
 import { useApp } from '../context/AppContext';
+import { useAuth, useAuthInitials } from '../context/AuthContext';
+import { AccountModal } from '../screens/AccountModal';
 import { AITutorScreen } from '../screens/AITutorScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { FlashcardsScreen } from '../screens/FlashcardsScreen';
+import { LoginScreen } from '../screens/LoginScreen';
 import { PomodoroScreen } from '../screens/PomodoroScreen';
 import { QuizScreen } from '../screens/QuizScreen';
 import { StudyScreen } from '../screens/StudyScreen';
@@ -21,18 +24,24 @@ const Tab = createBottomTabNavigator<MainTabParamList>();
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function BrandHeader() {
+  const initials = useAuthInitials();
+  const [accountOpen, setAccountOpen] = useState(false);
+
   return (
-    <View style={styles.topbar}>
-      <View style={styles.brand}>
-        <View style={styles.logo}>
-          <Text style={styles.logoText}>✦</Text>
+    <>
+      <View style={styles.topbar}>
+        <View style={styles.brand}>
+          <View style={styles.logo}>
+            <Text style={styles.logoText}>✦</Text>
+          </View>
+          <Text style={styles.brandText}>Study Buddy AI</Text>
         </View>
-        <Text style={styles.brandText}>Study Buddy AI</Text>
+        <Pressable style={styles.avatar} onPress={() => setAccountOpen(true)}>
+          <Text style={styles.avatarText}>{initials}</Text>
+        </Pressable>
       </View>
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>SB</Text>
-      </View>
-    </View>
+      <AccountModal visible={accountOpen} onClose={() => setAccountOpen(false)} />
+    </>
   );
 }
 
@@ -126,6 +135,16 @@ function AITutorTabScreen() {
 
 export function AppNavigator() {
   const { toast } = useApp();
+  const { ready, isSignedIn, skippedLogin } = useAuth();
+  const showLogin = ready && !isSignedIn && !skippedLogin;
+
+  if (!ready) {
+    return (
+      <View style={styles.boot}>
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
 
   return (
     <NavigationContainer>
@@ -138,36 +157,46 @@ export function AppNavigator() {
             contentStyle: { backgroundColor: colors.bg },
           }}
         >
-          <Stack.Screen
-            name="MainTabs"
-            component={MainTabs}
-            options={{ headerShown: false }}
-          />
-          <Stack.Screen
-            name="Flashcards"
-            component={FlashcardsScreen}
-            options={{ title: 'Flashcards' }}
-          />
-          <Stack.Screen
-            name="Study"
-            component={StudyScreen}
-            options={{ title: 'Study Flashcards' }}
-          />
-          <Stack.Screen
-            name="Quiz"
-            component={QuizScreen}
-            options={{ title: 'Quiz Mode' }}
-          />
-          <Stack.Screen
-            name="AITutor"
-            component={AITutorScreen}
-            options={{ title: 'AI Tutor' }}
-          />
-          <Stack.Screen
-            name="Pomodoro"
-            component={PomodoroScreen}
-            options={{ title: 'Pomodoro' }}
-          />
+          {showLogin ? (
+            <Stack.Screen
+              name="Login"
+              component={LoginScreen}
+              options={{ headerShown: false }}
+            />
+          ) : (
+            <>
+              <Stack.Screen
+                name="MainTabs"
+                component={MainTabs}
+                options={{ headerShown: false }}
+              />
+              <Stack.Screen
+                name="Flashcards"
+                component={FlashcardsScreen}
+                options={{ title: 'Flashcards' }}
+              />
+              <Stack.Screen
+                name="Study"
+                component={StudyScreen}
+                options={{ title: 'Study Flashcards' }}
+              />
+              <Stack.Screen
+                name="Quiz"
+                component={QuizScreen}
+                options={{ title: 'Quiz Mode' }}
+              />
+              <Stack.Screen
+                name="AITutor"
+                component={AITutorScreen}
+                options={{ title: 'AI Tutor' }}
+              />
+              <Stack.Screen
+                name="Pomodoro"
+                component={PomodoroScreen}
+                options={{ title: 'Pomodoro' }}
+              />
+            </>
+          )}
         </Stack.Navigator>
         <Toast message={toast.message} visible={toast.visible} />
       </View>
@@ -176,6 +205,12 @@ export function AppNavigator() {
 }
 
 const styles = StyleSheet.create({
+  boot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bg,
+  },
   safe: { flex: 1, backgroundColor: '#fff' },
   topbar: {
     height: 64,

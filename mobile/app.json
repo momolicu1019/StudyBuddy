@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "StudyBuddy AI",
-    "slug": "studybuddy-ai",
+    "name": "StudyBuddy",
+    "slug": "studdybuddy",
+    "owner": "nino1019w",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -45,7 +46,13 @@
           "photosPermission": "Allow StudyBuddy to access your photos for note uploads.",
           "cameraPermission": "Allow StudyBuddy to use your camera to photograph notes."
         }
-      ]
-    ]
+      ],
+      "expo-web-browser"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "28e3424a-74a4-4e3d-ae44-a45299bd94ba"
+      }
+    }
   }
 }

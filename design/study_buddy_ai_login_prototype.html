@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#6C63FF">
+<title>Study Buddy AI — Login Prototype</title>
+<style>
+:root{
+  --primary:#6c63ff;--primary-dark:#574ff0;--ink:#20243a;--muted:#74788f;
+  --bg:#f7f7fc;--card:#fff;--line:#e7e7f0;--danger:#d84a62;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;min-height:100vh;background:linear-gradient(135deg,#f7f7fc 0%,#eeedff 100%);
+  color:var(--ink);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+button,input{font:inherit}
+button{cursor:pointer}
+.page{min-height:100vh;display:grid;grid-template-columns:1fr 1fr}
+.brand-panel{
+  padding:clamp(30px,7vw,90px);display:flex;flex-direction:column;justify-content:center;
+  background:linear-gradient(145deg,#6c63ff,#857dff 55%,#a293ff);color:#fff;position:relative;overflow:hidden;
+}
+.brand-panel:before,.brand-panel:after{content:"";position:absolute;border-radius:50%;background:rgba(255,255,255,.08)}
+.brand-panel:before{width:360px;height:360px;right:-130px;top:-110px}.brand-panel:after{width:280px;height:280px;left:-150px;bottom:-110px}
+.logo-row{display:flex;align-items:center;gap:12px;font-weight:800;font-size:22px;position:relative;z-index:1}
+.logo{width:44px;height:44px;border-radius:14px;background:rgba(255,255,255,.18);display:grid;place-items:center;font-size:25px}
+.brand-content{max-width:520px;position:relative;z-index:1;margin-top:65px}
+.brand-content h1{font-size:clamp(36px,5vw,58px);line-height:1.04;margin:0 0 20px;letter-spacing:-1.5px}
+.brand-content p{font-size:18px;line-height:1.6;opacity:.9;margin:0 0 30px}
+.benefits{display:grid;gap:13px}.benefit{display:flex;align-items:center;gap:12px;font-weight:650}.benefit-icon{width:35px;height:35px;border-radius:11px;background:rgba(255,255,255,.17);display:grid;place-items:center}
+.form-side{display:flex;align-items:center;justify-content:center;padding:30px}
+.card{width:min(460px,100%);background:var(--card);border:1px solid var(--line);border-radius:24px;padding:clamp(24px,4vw,38px);box-shadow:0 25px 70px rgba(52,47,105,.12)}
+.mobile-logo{display:none;align-items:center;gap:9px;font-weight:800;margin-bottom:24px}.mobile-logo .logo{background:#eeedff;color:var(--primary);width:40px;height:40px}
+.tabs{display:grid;grid-template-columns:1fr 1fr;background:#f3f2fa;border-radius:12px;padding:4px;margin-bottom:25px}
+.tab{padding:11px;border-radius:9px;border:0;background:transparent;color:var(--muted);font-weight:750}.tab.active{background:#fff;color:var(--primary);box-shadow:0 2px 7px rgba(0,0,0,.06)}
+h2{margin:0 0 7px;font-size:27px}.subtitle{color:var(--muted);margin:0 0 23px;line-height:1.5}
+.form{display:grid;gap:15px}.field{display:grid;gap:7px}.field label{font-size:13px;font-weight:750}
+.input-wrap{position:relative}.input{width:100%;padding:13px 43px 13px 13px;border:1px solid var(--line);border-radius:11px;outline:none;background:#fff;color:var(--ink)}
+.input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(108,99,255,.1)}
+.eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:var(--muted);padding:8px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.remember{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:13px}.remember input{accent-color:var(--primary)}
+.link{border:0;background:none;color:var(--primary);font-weight:700;padding:0}.link:hover{text-decoration:underline}
+.primary{width:100%;padding:13px;border:0;border-radius:11px;background:var(--primary);color:#fff;font-weight:800}.primary:hover{background:var(--primary-dark)}
+.divider{display:flex;align-items:center;gap:10px;color:#9a9daf;font-size:12px;margin:20px 0}.divider:before,.divider:after{content:"";height:1px;background:var(--line);flex:1}
+.google{width:100%;padding:12px;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--ink);font-weight:750;display:flex;align-items:center;justify-content:center;gap:10px}.google:hover{background:#fafafd}
+.google-icon{width:20px;height:20px;display:grid;place-items:center;font-weight:900;font-size:18px}
+.terms{font-size:11px;color:var(--muted);line-height:1.5;text-align:center;margin:18px 0 0}.terms a{color:var(--primary);font-weight:650}
+.message{display:none;padding:11px 12px;border-radius:10px;background:#eefaf4;color:#218354;font-size:13px;font-weight:650}.message.show{display:block}
+.error{display:none;color:var(--danger);font-size:12px;margin-top:-7px}.error.show{display:block}
+.signup-prompt{text-align:center;color:var(--muted);font-size:13px;margin-top:21px}.signup-prompt button{margin-left:4px}
+.hidden{display:none!important}
+@media(max-width:850px){
+  .page{grid-template-columns:1fr}.brand-panel{display:none}.form-side{min-height:100vh;padding:18px}
+  .mobile-logo{display:flex}
+}
+@media(max-width:480px){
+  .form-side{padding:12px}.card{border:0;box-shadow:none;border-radius:18px;padding:20px 15px;background:transparent}
+  body{background:#fff}.tabs{margin-bottom:21px}
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <section class="brand-panel">
+    <div class="logo-row"><div class="logo">✦</div>Study Buddy AI</div>
+    <div class="brand-content">
+      <h1>Study smarter.<br>Not harder.</h1>
+      <p>Your AI-powered study companion for turning notes into flashcards, practicing with quizzes, getting explanations, and staying focused.</p>
+      <div class="benefits">
+        <div class="benefit"><div class="benefit-icon">🃏</div>Turn PDFs and notes into flashcards</div>
+        <div class="benefit"><div class="benefit-icon">🧠</div>Practice with personalized quizzes</div>
+        <div class="benefit"><div class="benefit-icon">✨</div>Get help from your AI tutor</div>
+        <div class="benefit"><div class="benefit-icon">🍅</div>Stay focused with Pomodoro sessions</div>
+      </div>
+    </div>
+  </section>
+
+  <main class="form-side">
+    <div class="card">
+      <div class="mobile-logo"><div class="logo">✦</div>Study Buddy AI</div>
+
+      <div class="tabs">
+        <button class="tab active" id="signinTab" onclick="showMode('signin')">Sign In</button>
+        <button class="tab" id="signupTab" onclick="showMode('signup')">Create Account</button>
+      </div>
+
+      <div id="signin">
+        <h2>Welcome back 👋</h2>
+        <p class="subtitle">Ready to continue learning?</p>
+
+        <div class="form">
+          <div class="field">
+            <label for="loginEmail">Email address</label>
+            <input class="input" id="loginEmail" type="email" placeholder="you@example.com" autocomplete="email">
+          </div>
+          <div class="field">
+            <label for="loginPassword">Password</label>
+            <div class="input-wrap">
+              <input class="input" id="loginPassword" type="password" placeholder="Enter your password" autocomplete="current-password">
+              <button class="eye" onclick="togglePassword('loginPassword',this)" aria-label="Show password">👁</button>
+            </div>
+          </div>
+          <div class="row">
+            <label class="remember"><input type="checkbox"> Remember me</label>
+            <button class="link" onclick="forgotPassword()">Forgot password?</button>
+          </div>
+          <div id="loginMessage" class="message"></div>
+          <button class="primary" onclick="signIn()">Sign In</button>
+        </div>
+
+        <div class="divider">OR</div>
+        <button class="google" onclick="googleSignIn()"><span class="google-icon">G</span> Continue with Google</button>
+        <div class="signup-prompt">Don't have an account?<button class="link" onclick="showMode('signup')">Create one</button></div>
+      </div>
+
+      <div id="signup" class="hidden">
+        <h2>Create your account 🎓</h2>
+        <p class="subtitle">Let's set up your personal study space.</p>
+
+        <div class="form">
+          <div class="field">
+            <label for="fullName">Full name</label>
+            <input class="input" id="fullName" type="text" placeholder="Your name" autocomplete="name">
+          </div>
+          <div class="field">
+            <label for="signupEmail">Email address</label>
+            <input class="input" id="signupEmail" type="email" placeholder="you@example.com" autocomplete="email">
+          </div>
+          <div class="field">
+            <label for="signupPassword">Password</label>
+            <div class="input-wrap">
+              <input class="input" id="signupPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password">
+              <button class="eye" onclick="togglePassword('signupPassword',this)" aria-label="Show password">👁</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="confirmPassword">Confirm password</label>
+            <div class="input-wrap">
+              <input class="input" id="confirmPassword" type="password" placeholder="Re-enter your password" autocomplete="new-password">
+              <button class="eye" onclick="togglePassword('confirmPassword',this)" aria-label="Show password">👁</button>
+            </div>
+            <div id="passwordError" class="error">Passwords don't match.</div>
+          </div>
+          <div id="signupMessage" class="message"></div>
+          <button class="primary" onclick="createAccount()">Create Account</button>
+        </div>
+
+        <div class="divider">OR</div>
+        <button class="google" onclick="googleSignIn()"><span class="google-icon">G</span> Sign up with Google</button>
+        <p class="terms">By creating an account, you agree to our <a href="#" onclick="return false">Terms of Service</a> and <a href="#" onclick="return false">Privacy Policy</a>.</p>
+        <div class="signup-prompt">Already have an account?<button class="link" onclick="showMode('signin')">Sign in</button></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+function showMode(mode){
+  const signin=mode==='signin';
+  document.getElementById('signin').classList.toggle('hidden',!signin);
+  document.getElementById('signup').classList.toggle('hidden',signin);
+  document.getElementById('signinTab').classList.toggle('active',signin);
+  document.getElementById('signupTab').classList.toggle('active',!signin);
+}
+function togglePassword(id,btn){
+  const input=document.getElementById(id);
+  input.type=input.type==='password'?'text':'password';
+  btn.textContent=input.type==='password'?'👁':'🙈';
+}
+function signIn(){
+  const email=document.getElementById('loginEmail').value.trim();
+  const password=document.getElementById('loginPassword').value;
+  const box=document.getElementById('loginMessage');
+  if(!email||!password){box.textContent='Please enter your email and password.';box.classList.add('show');return}
+  box.textContent='Demo sign-in successful! In the real app, this will authenticate your account.';
+  box.classList.add('show');
+}
+function createAccount(){
+  const name=document.getElementById('fullName').value.trim();
+  const email=document.getElementById('signupEmail').value.trim();
+  const password=document.getElementById('signupPassword').value;
+  const confirm=document.getElementById('confirmPassword').value;
+  const err=document.getElementById('passwordError');
+  const box=document.getElementById('signupMessage');
+  err.classList.remove('show');box.classList.remove('show');
+  if(!name||!email||!password||!confirm){box.textContent='Please complete all fields.';box.classList.add('show');return}
+  if(password.length<8){box.textContent='Password must contain at least 8 characters.';box.classList.add('show');return}
+  if(password!==confirm){err.classList.add('show');return}
+  box.textContent=`Welcome, ${name}! Your account is ready in this prototype.`;
+  box.classList.add('show');
+}
+function googleSignIn(){
+  alert('Google Sign-In selected. In the production app, this button will open Google OAuth.');
+}
+function forgotPassword(){
+  alert('Password recovery selected. The production app will send a password reset email.');
+}
+</script>
+</body>
+</html>

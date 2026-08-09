@@ -1,0 +1,60 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { EMPTY_LOCAL_DB, type LocalDatabase } from './schema';
+
+const STORAGE_KEY = 'studybuddy.local.v1';
+
+function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
+  const base = JSON.parse(JSON.stringify(EMPTY_LOCAL_DB)) as LocalDatabase;
+  if (!raw) return base;
+
+  return {
+    subjects: raw.subjects ?? [],
+    flashcards: raw.flashcards ?? {},
+    pdfs: raw.pdfs ?? [],
+    progress: {
+      flashcards_reviewed: raw.progress?.flashcards_reviewed ?? 0,
+      quiz_average: raw.progress?.quiz_average ?? 0,
+      focus_hours: raw.progress?.focus_hours ?? 0,
+      quizzes_taken: raw.progress?.quizzes_taken ?? 0,
+    },
+    quizzes: raw.quizzes ?? [],
+    settings: {
+      cloud_sync_enabled: raw.settings?.cloud_sync_enabled ?? false,
+      daily_goal_minutes: raw.settings?.daily_goal_minutes ?? 25,
+    },
+    next_subject_id: raw.next_subject_id ?? 1,
+    next_card_id: raw.next_card_id ?? 1,
+    next_pdf_id: raw.next_pdf_id ?? 1,
+  };
+}
+
+export async function loadLocalDb(): Promise<LocalDatabase> {
+  try {
+    const json = await AsyncStorage.getItem(STORAGE_KEY);
+    if (!json) return normalize(null);
+    return normalize(JSON.parse(json) as Partial<LocalDatabase>);
+  } catch {
+    return normalize(null);
+  }
+}
+
+export async function saveLocalDb(db: LocalDatabase): Promise<void> {
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+}
+
+export async function updateLocalDb(
+  mutator: (db: LocalDatabase) => void | LocalDatabase,
+): Promise<LocalDatabase> {
+  const db = await loadLocalDb();
+  const result = mutator(db);
+  const next = result ?? db;
+  await saveLocalDb(next);
+  return next;
+}
+
+export async function resetLocalDb(): Promise<LocalDatabase> {
+  const empty = normalize(null);
+  await saveLocalDb(empty);
+  return empty;
+}

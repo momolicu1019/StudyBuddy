@@ -24,19 +24,12 @@ def get_quiz(subject_id: int) -> list[QuizQuestion]:
 
     cards = data["flashcards"].get(str(subject_id), [])
     if not cards:
-        # Fallback demo questions when deck is empty
-        return [
-            QuizQuestion(
-                id=1,
-                question=f"Ready to start a {subject['name']} quiz?",
-                options=["Yes, let's go!", "Maybe later", "I need more cards", "Ask AI Tutor"],
-                correct_index=0,
-            )
-        ]
+        return []
 
+    distractors = list(DISTRACTORS)
     questions: list[QuizQuestion] = []
-    for index, card in enumerate(cards[:8]):
-        options = [card["answer"], *DISTRACTORS[:3]]
+    for card in cards[:8]:
+        options = [card["answer"], *distractors[:3]]
         questions.append(
             QuizQuestion(
                 id=card["id"],
@@ -45,9 +38,7 @@ def get_quiz(subject_id: int) -> list[QuizQuestion]:
                 correct_index=0,
             )
         )
-        # Rotate distractors so options feel varied
-        DISTRACTORS.append(DISTRACTORS.pop(0))
-        _ = index
+        distractors.append(distractors.pop(0))
     return questions
 
 
@@ -59,7 +50,10 @@ def submit_quiz(payload: QuizSubmit) -> QuizResult:
         raise HTTPException(status_code=404, detail="Subject not found")
 
     cards = {c["id"]: c for c in data["flashcards"].get(str(payload.subject_id), [])}
-    total = max(len(payload.answers), 1)
+    if not cards or not payload.answers:
+        raise HTTPException(status_code=400, detail="No quiz answers to grade")
+
+    total = len(payload.answers)
     score = 0
 
     for card_id, answer_index in payload.answers.items():
@@ -69,13 +63,21 @@ def submit_quiz(payload: QuizSubmit) -> QuizResult:
             card = cards.get(int(card_id))
             if card and not card.get("mastered"):
                 card["mastered"] = True
-                subject["mastered"] = min(subject["cards"], subject["mastered"] + 1)
+
+    subject["mastered"] = sum(
+        1 for c in data["flashcards"].get(str(payload.subject_id), []) if c.get("mastered")
+    )
+    subject["cards"] = len(data["flashcards"].get(str(payload.subject_id), []))
+    subject["last"] = "Just now"
 
     percentage = round((score / total) * 100)
-    subject["last"] = "Just now"
-    # Blend into rolling average
-    prev = data["stats"]["quiz_average"]
-    data["stats"]["quiz_average"] = round((prev + percentage) / 2)
+    taken = data["stats"].get("quizzes_taken", 0)
+    prev = data["stats"].get("quiz_average", 0)
+    if taken == 0:
+        data["stats"]["quiz_average"] = percentage
+    else:
+        data["stats"]["quiz_average"] = round((prev + percentage) / 2)
+    data["stats"]["quizzes_taken"] = taken + 1
     save_data(data)
 
     if percentage >= 80:

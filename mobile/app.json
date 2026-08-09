@@ -17,6 +17,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.studybuddy.ai",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "StudyBuddy needs camera access to photograph your notes and generate flashcards.",
         "NSPhotoLibraryUsageDescription": "StudyBuddy needs photo library access to import note images."
       }

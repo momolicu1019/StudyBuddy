@@ -33,22 +33,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build Android & iOS
+  prepare:
+    name: Install & typecheck
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: mobile
-
+    outputs:
+      platform: ${{ steps.resolve.outputs.platform }}
+      profile: ${{ steps.resolve.outputs.profile }}
     steps:
       - name: Check for EXPO_TOKEN
         run: |
           if [ -z "${{ secrets.EXPO_TOKEN }}" ]; then
             echo "Add an EXPO_TOKEN repository secret (Expo personal access token)."
             echo "Create one at https://expo.dev/settings/access-tokens"
-            echo "Then add it under GitHub → Settings → Secrets and variables → Actions"
             exit 1
           fi
+        working-directory: .
+
+      - name: Resolve inputs
+        id: resolve
+        run: |
+          echo "platform=${{ github.event.inputs.platform || 'all' }}" >> "$GITHUB_OUTPUT"
+          echo "profile=${{ github.event.inputs.profile || 'preview' }}" >> "$GITHUB_OUTPUT"
         working-directory: .
 
       - name: Checkout repository
@@ -74,12 +82,60 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Trigger EAS build (Android + iOS)
+  build-android:
+    name: Build Android
+    needs: prepare
+    if: needs.prepare.outputs.platform == 'all' || needs.prepare.outputs.platform == 'android'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - name: Trigger Android EAS build
         run: |
-          PLATFORM="${{ github.event.inputs.platform || 'all' }}"
-          PROFILE="${{ github.event.inputs.profile || 'preview' }}"
           eas build \
-            --platform "$PLATFORM" \
-            --profile "$PROFILE" \
+            --platform android \
+            --profile "${{ needs.prepare.outputs.profile }}" \
+            --non-interactive \
+            --no-wait
+
+  build-ios:
+    name: Build iOS
+    needs: prepare
+    if: needs.prepare.outputs.platform == 'all' || needs.prepare.outputs.platform == 'ios'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - name: Trigger iOS EAS build
+        run: |
+          eas build \
+            --platform ios \
+            --profile "${{ needs.prepare.outputs.profile }}" \
             --non-interactive \
             --no-wait

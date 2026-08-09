@@ -84,11 +84,11 @@ See [backend/README.md](backend/README.md) if you want to run the FastAPI servic
 
 ### CI builds (Android APK + iOS IPA)
 
-Pushing changes under `mobile/` to `main` triggers [EAS Build](https://docs.expo.dev/build/introduction/) via GitHub Actions (`.github/workflows/eas-build.yml`). Artifacts use the `preview` profile: installable **Android APK** and **iOS IPA** (internal distribution).
+Pushing changes under `mobile/` to `main` triggers [EAS Build](https://docs.expo.dev/build/introduction/) via GitHub Actions (`.github/workflows/eas-build.yml`). Android and iOS run as **separate jobs** (so Android can succeed even if iOS credentials are missing). Artifacts use the `preview` profile: installable **Android APK** and **iOS IPA** (internal / ad-hoc distribution).
 
 1. Create an Expo access token: https://expo.dev/settings/access-tokens
 2. Add it as a GitHub Actions secret named `EXPO_TOKEN` (Settings → Secrets and variables → Actions)
-3. Run one interactive build locally so credentials exist for non-interactive CI:
+3. Create credentials **once on your machine** (CI is non-interactive and cannot answer Apple prompts):
 
 ```bash
 cd mobile
@@ -96,6 +96,8 @@ npx eas-cli login
 npx eas-cli build --platform android --profile preview
 npx eas-cli build --platform ios --profile preview
 ```
+
+For iOS you need an **Apple Developer** account. EAS will create a distribution certificate and an **ad-hoc** provisioning profile. Register at least one device UDID when prompted. After that, GitHub Actions can reuse the remote credentials.
 
 Build progress and download links appear in the [Expo dashboard](https://expo.dev) and the Actions run log. You can also start a build manually from the **Actions** tab (`workflow_dispatch`).
 

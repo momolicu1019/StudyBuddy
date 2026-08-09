@@ -84,22 +84,25 @@ See [backend/README.md](backend/README.md) if you want to run the FastAPI servic
 
 ### CI builds (Android APK + iOS IPA)
 
-Pushing changes under `mobile/` to `main` triggers [EAS Build](https://docs.expo.dev/build/introduction/) via GitHub Actions (`.github/workflows/eas-build.yml`). Android and iOS run as **separate jobs** (so Android can succeed even if iOS credentials are missing). Artifacts use the `preview` profile: installable **Android APK** and **iOS IPA** (internal / ad-hoc distribution).
+Pushing changes under `mobile/` to `main` builds **Android** automatically, waits for EAS to finish, then publishes:
+
+- GitHub Actions artifact
+- GitHub Release **`studybuddy_v1.0.0`** (from `app.json` → `expo.version`) with `studybuddy_v1.0.0.apk`
+
+**iOS** IPA (`studybuddy_v1.0.0.ipa`) is added to the same release after you create Apple credentials once and run the workflow with platform `ios` or `all`.
 
 1. Create an Expo access token: https://expo.dev/settings/access-tokens
-2. Add it as a GitHub Actions secret named `EXPO_TOKEN` (Settings → Secrets and variables → Actions)
-3. Create credentials **once on your machine** (CI is non-interactive and cannot answer Apple prompts):
+2. Add it as a GitHub Actions secret named `EXPO_TOKEN`
+3. One-time iOS setup on your machine (Apple Developer account required):
 
 ```bash
 cd mobile
 npx eas-cli login
-npx eas-cli build --platform android --profile preview
+npx eas-cli device:create
 npx eas-cli build --platform ios --profile preview
 ```
 
-For iOS you need an **Apple Developer** account. EAS will create a distribution certificate and an **ad-hoc** provisioning profile. Register at least one device UDID when prompted. After that, GitHub Actions can reuse the remote credentials.
-
-Build progress and download links appear in the [Expo dashboard](https://expo.dev) and the Actions run log. You can also start a build manually from the **Actions** tab (`workflow_dispatch`).
+Release page: **GitHub → Releases → studybuddy_v1.0.0**. Bump `expo.version` in `mobile/app.json` when you want `studybuddy_v1.0.1`, etc.
 
 ## Design
 

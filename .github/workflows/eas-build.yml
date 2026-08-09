@@ -32,6 +32,9 @@ concurrency:
   group: eas-build-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   prepare:
     name: Install & typecheck
@@ -42,6 +45,8 @@ jobs:
     outputs:
       platform: ${{ steps.resolve.outputs.platform }}
       profile: ${{ steps.resolve.outputs.profile }}
+      version: ${{ steps.version.outputs.version }}
+      asset_basename: ${{ steps.version.outputs.asset_basename }}
     steps:
       - name: Check for EXPO_TOKEN
         run: |
@@ -55,12 +60,25 @@ jobs:
       - name: Resolve inputs
         id: resolve
         run: |
-          echo "platform=${{ github.event.inputs.platform || 'all' }}" >> "$GITHUB_OUTPUT"
-          echo "profile=${{ github.event.inputs.profile || 'preview' }}" >> "$GITHUB_OUTPUT"
+          # Push builds Android only until iOS ad-hoc credentials exist on EAS.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "platform=${{ github.event.inputs.platform }}" >> "$GITHUB_OUTPUT"
+            echo "profile=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "platform=android" >> "$GITHUB_OUTPUT"
+            echo "profile=preview" >> "$GITHUB_OUTPUT"
+          fi
         working-directory: .
 
       - name: Checkout repository
         uses: actions/checkout@v5
+
+      - name: Read app version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./app.json').expo.version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "asset_basename=studybuddy_v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -83,10 +101,11 @@ jobs:
         run: npm run typecheck
 
   build-android:
-    name: Build Android
+    name: Build Android APK
     needs: prepare
     if: needs.prepare.outputs.platform == 'all' || needs.prepare.outputs.platform == 'android'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: mobile
@@ -103,19 +122,84 @@ jobs:
           packager: npm
           token: ${{ secrets.EXPO_TOKEN }}
       - run: npm ci
-      - name: Trigger Android EAS build
+      - name: Build Android on EAS (wait for finish)
+        id: build
         run: |
+          set -o pipefail
+          mkdir -p ../dist
+          # JSON on stdout; keep logs on stderr
           eas build \
             --platform android \
             --profile "${{ needs.prepare.outputs.profile }}" \
             --non-interactive \
-            --no-wait
+            --json \
+            > ../dist/android-build.json
+
+          node <<'NODE'
+          const fs = require('fs');
+          const raw = fs.readFileSync('../dist/android-build.json', 'utf8').trim();
+          const data = JSON.parse(raw);
+          const build = Array.isArray(data) ? data[0] : data;
+          if (!build?.id) {
+            console.error('Unexpected EAS build JSON:', raw.slice(0, 500));
+            process.exit(1);
+          }
+          if (build.status && build.status !== 'FINISHED') {
+            console.error('Build did not finish successfully:', build.status, build.error);
+            process.exit(1);
+          }
+          const url =
+            build.artifacts?.buildUrl ||
+            build.artifacts?.applicationArchiveUrl ||
+            '';
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `build_id=${build.id}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `artifact_url=${url}\n`);
+          console.log('EAS Android build id:', build.id);
+          console.log('Artifact URL present:', Boolean(url));
+          NODE
+
+      - name: Download and rename APK
+        run: |
+          BASENAME="${{ needs.prepare.outputs.asset_basename }}"
+          URL="${{ steps.build.outputs.artifact_url }}"
+          BUILD_ID="${{ steps.build.outputs.build_id }}"
+          mkdir -p ../dist
+          TMP="../dist/android-raw"
+          mkdir -p "$TMP"
+
+          if [ -n "$URL" ]; then
+            curl -L --fail --retry 3 -o "$TMP/app.bin" "$URL"
+          else
+            eas build:download --build-id "$BUILD_ID" --non-interactive
+            FOUND=$(find . .. -maxdepth 4 -type f \( -name '*.apk' -o -name '*.aab' \) | head -n 1)
+            cp "$FOUND" "$TMP/app.bin"
+          fi
+
+          # Detect APK vs AAB by magic / fallback to .apk for preview profile
+          EXT="apk"
+          if file "$TMP/app.bin" | grep -qi 'Zip archive'; then
+            if unzip -l "$TMP/app.bin" 2>/dev/null | grep -q 'BundleConfig.pb\|BUNDLE-METADATA'; then
+              EXT="aab"
+            fi
+          fi
+
+          OUT="../dist/${BASENAME}.${EXT}"
+          mv "$TMP/app.bin" "$OUT"
+          ls -lh "$OUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.asset_basename }}-android
+          path: dist/${{ needs.prepare.outputs.asset_basename }}.*
+          if-no-files-found: error
 
   build-ios:
-    name: Build iOS
+    name: Build iOS IPA
     needs: prepare
     if: needs.prepare.outputs.platform == 'all' || needs.prepare.outputs.platform == 'ios'
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: mobile
@@ -132,10 +216,122 @@ jobs:
           packager: npm
           token: ${{ secrets.EXPO_TOKEN }}
       - run: npm ci
-      - name: Trigger iOS EAS build
+      - name: Build iOS on EAS (wait for finish)
+        id: build
         run: |
+          set -o pipefail
+          mkdir -p ../dist
+          set +e
           eas build \
             --platform ios \
             --profile "${{ needs.prepare.outputs.profile }}" \
             --non-interactive \
-            --no-wait
+            --json \
+            > ../dist/ios-build.json
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo ""
+            echo "::error::iOS preview builds need ad-hoc credentials created interactively once."
+            echo "On your machine (with an Apple Developer account):"
+            echo "  cd mobile && npx eas-cli login && npx eas-cli device:create"
+            echo "  npx eas-cli build --platform ios --profile preview"
+            exit "$status"
+          fi
+
+          node <<'NODE'
+          const fs = require('fs');
+          const raw = fs.readFileSync('../dist/ios-build.json', 'utf8').trim();
+          const data = JSON.parse(raw);
+          const build = Array.isArray(data) ? data[0] : data;
+          if (!build?.id) {
+            console.error('Unexpected EAS build JSON:', raw.slice(0, 500));
+            process.exit(1);
+          }
+          if (build.status && build.status !== 'FINISHED') {
+            console.error('Build did not finish successfully:', build.status, build.error);
+            process.exit(1);
+          }
+          const url =
+            build.artifacts?.buildUrl ||
+            build.artifacts?.applicationArchiveUrl ||
+            '';
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `build_id=${build.id}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `artifact_url=${url}\n`);
+          console.log('EAS iOS build id:', build.id);
+          NODE
+
+      - name: Download and rename IPA
+        run: |
+          BASENAME="${{ needs.prepare.outputs.asset_basename }}"
+          URL="${{ steps.build.outputs.artifact_url }}"
+          BUILD_ID="${{ steps.build.outputs.build_id }}"
+          mkdir -p ../dist
+          TMP="../dist/ios-raw"
+          mkdir -p "$TMP"
+
+          if [ -n "$URL" ]; then
+            curl -L --fail --retry 3 -o "$TMP/app.ipa" "$URL"
+          else
+            eas build:download --build-id "$BUILD_ID" --non-interactive
+            FOUND=$(find . .. -maxdepth 4 -type f -name '*.ipa' | head -n 1)
+            cp "$FOUND" "$TMP/app.ipa"
+          fi
+
+          OUT="../dist/${BASENAME}.ipa"
+          mv "$TMP/app.ipa" "$OUT"
+          ls -lh "$OUT"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.asset_basename }}-ios
+          path: dist/${{ needs.prepare.outputs.asset_basename }}.ipa
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, build-android, build-ios]
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build-android.result == 'success' || needs.build-ios.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Android artifact
+        if: needs.build-android.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.asset_basename }}-android
+          path: release-assets
+
+      - name: Download iOS artifact
+        if: needs.build-ios.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.asset_basename }}-ios
+          path: release-assets
+
+      - name: List release assets
+        run: ls -lah release-assets
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: studybuddy_v${{ needs.prepare.outputs.version }}
+          body: |
+            StudyBuddy installers for **v${{ needs.prepare.outputs.version }}**.
+
+            Built with EAS profile `${{ needs.prepare.outputs.profile }}` from `${{ github.sha }}`.
+
+            | File | Platform |
+            |---|---|
+            | `studybuddy_v${{ needs.prepare.outputs.version }}.apk` | Android |
+            | `studybuddy_v${{ needs.prepare.outputs.version }}.ipa` | iOS (when available) |
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          make_latest: true
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

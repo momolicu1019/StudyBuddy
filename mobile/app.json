@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "StudyBuddy AI",
+    "slug": "studybuddy-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "studybuddy",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#6C63FF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.studybuddy.ai",
+      "infoPlist": {
+        "NSCameraUsageDescription": "StudyBuddy needs camera access to photograph your notes and generate flashcards.",
+        "NSPhotoLibraryUsageDescription": "StudyBuddy needs photo library access to import note images."
+      }
+    },
+    "android": {
+      "package": "com.studybuddy.ai",
+      "adaptiveIcon": {
+        "backgroundColor": "#6C63FF",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow StudyBuddy to access your photos for note uploads.",
+          "cameraPermission": "Allow StudyBuddy to use your camera to photograph notes."
+        }
+      ]
+    ]
+  }
+}

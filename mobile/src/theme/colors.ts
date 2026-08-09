@@ -1,0 +1,18 @@
+export const colors = {
+  primary: '#6C63FF',
+  primary2: '#8B83FF',
+  ink: '#20243A',
+  muted: '#73778F',
+  bg: '#F7F7FC',
+  card: '#FFFFFF',
+  line: '#E9E9F2',
+  success: '#39B77A',
+  warning: '#FFB84D',
+  danger: '#D84A62',
+  dangerSoft: '#FFF0F2',
+  primarySoft: '#F0EFFF',
+  iconBg: '#EEEDFF',
+  purpleTint: '#F8F7FF',
+  shadow: 'rgba(37, 35, 77, 0.08)',
+  overlay: 'rgba(24, 25, 43, 0.45)',
+} as const;

@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { DraftFlashcard } from '../api/types';
 import { isAiConfigured } from './aiConfig';
+import { formatExplanationAsBullets } from './explanationFormat';
 import { generateWithGemini } from './geminiClient';
 import {
   labelForSource,
@@ -55,7 +56,7 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
 
 function toReviewCard(title: string, summary: string): DraftFlashcard | null {
   const front = title.trim().replace(/\?+$/g, '').trim();
-  const back = summary.trim();
+  const back = formatExplanationAsBullets(summary.trim());
   // Exam reviewers need a real explanation, not a tiny phrase.
   if (front.length < 2 || back.length < 40) return null;
   if (/^(what|why|how|when|where|who|which)\b/i.test(front)) {
@@ -207,20 +208,22 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
     '  "key_points": [',
     '    {',
     '      "title": "short concept name (NOT a quiz question)",',
-    '      "explanation": "informative research-style summary (see rules)"',
+    '      "explanation": "bullet list string (see rules)"',
     '    }',
     '  ]',
     '}',
     '',
     'Writing style for each explanation (critical):',
-    '- Write an informative summary like a concise research/textbook note about the CONCEPT.',
-    '- Explain the idea in clear academic prose: what it is, how it works, key details, and significance.',
+    '- ALWAYS write the explanation as a BULLET LIST — never one long paragraph.',
+    '- Put each point on its own line starting with "• " (Unicode bullet + space).',
+    '- Use 4 to 7 short bullets covering: what it is, how it works, key details, formulas/examples, and why it matters.',
+    '- Keep each bullet to one clear idea (about 1 short sentence).',
     '- Include formulas, mechanisms, comparisons, cause/effect, and examples from the material when present.',
-    '- Prefer 4 to 8 dense, useful sentences (or labeled bullets: Definition / Mechanism / Significance).',
     '',
     'Hard bans — never do these:',
+    '- Do NOT write a single paragraph wall of text.',
     '- Do NOT describe the page/photo layout (no “at the top of the page”, “on the left”, “the heading says”, “this slide shows”, “the image contains”).',
-    '- Do NOT narrate OCR/visual structure, boxes, columns, bullet formatting, or where text appears.',
+    '- Do NOT narrate OCR/visual structure, boxes, columns, or where text appears.',
     '- Do NOT translate captions/labels literally as UI description; convert them into conceptual knowledge.',
     '- Do NOT invent facts that are not supported by the material.',
     '',

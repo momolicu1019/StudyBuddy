@@ -72,6 +72,7 @@ export function QuizScreen({ route, navigation }: Props) {
     setAnswers({});
     setIndex(0);
     try {
+      showToast('Creating quiz questions with AI…');
       const data = await api.getQuiz(selectedIds);
       if (!data.length) {
         showToast('No quiz questions could be generated');
@@ -79,8 +80,11 @@ export function QuizScreen({ route, navigation }: Props) {
       }
       setQuestions(data);
       setPhase('quiz');
-    } catch {
-      showToast('Could not start quiz. Try again.');
+      showToast(`${data.length} quiz questions ready`);
+    } catch (error) {
+      const detail =
+        error instanceof Error ? error.message : 'Could not start quiz. Try again.';
+      showToast(detail);
     } finally {
       setLoading(false);
     }
@@ -304,8 +308,9 @@ export function QuizScreen({ route, navigation }: Props) {
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
       <Text style={styles.h1}>🧠 Quiz Mode</Text>
       <Text style={[styles.sub, { marginBottom: 16 }]}>
-        Select one or more subject folders. We’ll pull up to {QUIZ_SIZE} random
-        multiple-choice questions from their flashcards.
+        Select one or more subject folders. After you start, AI builds up to{' '}
+        {QUIZ_SIZE} multiple-choice questions from your flashcards — focused on
+        understanding, not plain definitions.
       </Text>
 
       <View style={styles.subjectList}>
@@ -340,16 +345,14 @@ export function QuizScreen({ route, navigation }: Props) {
             : 'No folders selected yet'}
         </Text>
         <Text style={[styles.sub, { marginTop: 6 }]}>
-          {availableCards >= QUIZ_SIZE
-            ? `Quiz length: ${QUIZ_SIZE} random questions`
-            : availableCards > 0
-              ? `Quiz length: ${availableCards} question${availableCards === 1 ? '' : 's'} (add more flashcards for a full ${QUIZ_SIZE})`
-              : 'Generate flashcards first to unlock quiz questions'}
+          {availableCards > 0
+            ? `AI will generate up to ${Math.min(QUIZ_SIZE, Math.max(5, availableCards * 2))} understanding-based questions`
+            : 'Generate flashcards first to unlock quiz questions'}
         </Text>
       </Card>
 
       <PrimaryButton
-        label={loading ? 'Preparing quiz…' : `Start quiz`}
+        label={loading ? 'AI is writing questions…' : 'Start quiz'}
         onPress={() => void startQuiz()}
         style={{ marginTop: 18, opacity: loading ? 0.7 : 1 }}
       />

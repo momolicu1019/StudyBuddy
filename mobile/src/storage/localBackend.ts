@@ -212,7 +212,7 @@ export const localBackend = {
   },
 
   async getQuiz(subjectId: number | number[]): Promise<QuizQuestion[]> {
-    const { buildQuizQuestions } = await import('./quizBuilder');
+    const { buildQuizQuestionsViaGemini } = await import('./quizBuilder');
     const db = await loadLocalDb();
     const ids = (Array.isArray(subjectId) ? subjectId : [subjectId]).filter(
       (id) => db.subjects.some((s) => s.id === id),
@@ -220,7 +220,10 @@ export const localBackend = {
     if (!ids.length) throw new Error('Subject not found');
 
     const cards = ids.flatMap((id) => db.flashcards[String(id)] ?? []);
-    return buildQuizQuestions(cards, 20);
+    if (!cards.length) return [];
+
+    const result = await buildQuizQuestionsViaGemini(cards, 20);
+    return result.questions;
   },
 
   async submitQuiz(
@@ -260,6 +263,8 @@ export const localBackend = {
 
       for (const review of reviews) {
         if (!review.is_correct) continue;
+        // Only mark flashcards when the question id still maps to a real card
+        // (local fallback). Gemini-generated questions use synthetic ids.
         for (const id of ids) {
           const card = (db.flashcards[String(id)] ?? []).find(
             (c) => c.id === review.id,

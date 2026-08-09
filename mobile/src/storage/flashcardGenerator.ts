@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { DraftFlashcard } from '../api/types';
 import { isAiConfigured } from './aiConfig';
+import { formatExplanationAsBullets } from './explanationFormat';
 import { generateAiText, generateWithGemini } from './geminiClient';
 import {
   labelForSource,
@@ -34,7 +35,7 @@ function looksLikeQuestion(text: string): boolean {
 
 function toReviewCard(title: string, summary: string): DraftFlashcard | null {
   const front = title.trim().replace(/\?+$/g, '').trim();
-  const back = summary.trim();
+  const back = formatExplanationAsBullets(summary.trim());
   if (front.length < 2 || back.length < 40) return null;
   return { question: front, answer: back };
 }
@@ -134,10 +135,10 @@ const FLASHCARD_INSTRUCTIONS = [
   'You are Study Buddy, an academic research tutor who writes informative study summaries.',
   'Create exam-review flashcards from the study material.',
   'Do NOT write quiz questions. Do NOT start titles with What/Why/How/Define.',
-  'Each card: short concept title + an informative research-style explanation of the concept.',
-  'Explain what the idea is, how it works, key details, and why it matters — like a concise textbook note.',
+  'Each card: short concept title + a BULLETED explanation (never one long paragraph).',
+  'Write explanation as 4 to 7 short lines, each starting with "• ", covering: what it is, how it works, key details, formulas/examples, and why it matters.',
+  'Keep each bullet to one clear idea (about one short sentence).',
   'Include formulas, processes, comparisons, and examples when present in the source.',
-  'Prefer 4 to 8 dense sentences, or labeled bullets (Definition / Mechanism / Significance).',
   'Never describe page/photo layout (no “at the top”, “on the left”, “this slide shows”, “the heading says”, “the image contains”).',
   'Never narrate OCR/visual structure; convert the content into conceptual knowledge only.',
   'Do not invent facts not supported by the material.',
@@ -369,7 +370,7 @@ export async function buildFlashcardsFromTutorReply(input: {
         'You are Study Buddy, an academic research tutor.',
         'Convert the tutor answer into exam-review flashcards.',
         'Do NOT write quiz questions. Titles must be concept names.',
-        'Each card needs title + informative research-style explanation.',
+        'Each card needs title + a BULLETED explanation (4–7 lines starting with "• "; never one paragraph).',
         'Do not mention chat, tutors, or that this came from an AI reply.',
         'Return ONLY valid JSON array with keys "title" and "explanation".',
         'Create 4 to 12 cards from the most important ideas in the answer.',

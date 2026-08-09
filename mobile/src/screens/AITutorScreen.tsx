@@ -51,6 +51,7 @@ export function AITutorScreen({ route }: Props) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const cloudReady = isCloudTutorConfigured();
   const [messages, setMessages] = useState<ChatItem[]>([
     {
@@ -86,14 +87,16 @@ export function AITutorScreen({ route }: Props) {
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSub = Keyboard.addListener(showEvent, () => {
+    const showSub = Keyboard.addListener(showEvent, (event) => {
       setKeyboardVisible(true);
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
       requestAnimationFrame(() => {
         scrollRef.current?.scrollToEnd({ animated: true });
       });
     });
     const hideSub = Keyboard.addListener(hideEvent, () => {
       setKeyboardVisible(false);
+      setKeyboardHeight(0);
     });
     return () => {
       showSub.remove();
@@ -219,88 +222,105 @@ export function AITutorScreen({ route }: Props) {
     }
   }
 
-  const keyboardOffset =
-    headerHeight + (Platform.OS === 'ios' ? Math.max(tabBarHeight, 8) : 12);
+  // Stack header when pushed; tab bar is usually hidden while typing.
+  const iosOffset = headerHeight + (tabBarHeight > 0 ? 8 : 12);
+  const androidLift =
+    keyboardHeight > 0
+      ? Math.max(0, keyboardHeight - (keyboardVisible ? 0 : tabBarHeight))
+      : 0;
 
   return (
     <KeyboardAvoidingView
       style={styles.root}
-      behavior="padding"
-      keyboardVerticalOffset={keyboardOffset}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={iosOffset}
+      enabled={Platform.OS === 'ios'}
     >
-      <ScrollView
-        ref={scrollRef}
-        style={styles.chatScroll}
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="interactive"
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
-      >
-        <Text style={styles.h1}>✦ AI Tutor</Text>
-        <Text style={styles.sub}>
-          Ask questions and get direct answers
-          {subject ? ` for ${subject}` : ''}.
-          {!cloudReady ? ' AI is offline on this device right now.' : ' AI is ready.'}
-          {' '}You can turn answers into flashcards.
-        </Text>
-
-        <View style={styles.chat}>
-          {messages.map((m, i) => (
-            <Card
-              key={`${m.role}-${i}`}
-              style={[
-                styles.bubble,
-                m.role === 'user' ? styles.userBubble : styles.botBubble,
-              ]}
-            >
-              <Text style={styles.bubbleText}>{m.text}</Text>
-              {m.role === 'assistant' && m.allowFlashcards ? (
-                <PrimaryButton
-                  label={
-                    makingCards && cardSource?.reply === m.text
-                      ? 'Creating cards…'
-                      : 'Make flashcards'
-                  }
-                  variant="secondary"
-                  onPress={() => void startFlashcardsFromReply(m.text, i)}
-                  style={styles.cardAction}
-                />
-              ) : null}
-            </Card>
-          ))}
-        </View>
-      </ScrollView>
-
       <View
         style={[
-          styles.composer,
-          {
-            paddingBottom: Math.max(
-              insets.bottom,
-              keyboardVisible && Platform.OS === 'android' ? 10 : insets.bottom || 10,
-            ),
-          },
+          styles.root,
+          Platform.OS === 'android' && androidLift > 0
+            ? { paddingBottom: androidLift }
+            : null,
         ]}
       >
-        <TextInput
-          value={input}
-          onChangeText={setInput}
-          placeholder="Ask a study question..."
-          placeholderTextColor={colors.muted}
-          style={styles.input}
-          multiline
-          editable={!busy}
-          onFocus={() => {
-            requestAnimationFrame(() => {
-              scrollRef.current?.scrollToEnd({ animated: true });
-            });
-          }}
-        />
-        <PrimaryButton
-          label={busy ? '…' : 'Send'}
-          onPress={() => void send()}
-          style={{ minWidth: 88, opacity: busy ? 0.7 : 1 }}
-        />
+        <ScrollView
+          ref={scrollRef}
+          style={styles.chatScroll}
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          onContentSizeChange={() =>
+            scrollRef.current?.scrollToEnd({ animated: true })
+          }
+        >
+          <Text style={styles.h1}>✦ AI Tutor</Text>
+          <Text style={styles.sub}>
+            Ask questions and get direct answers
+            {subject ? ` for ${subject}` : ''}.
+            {!cloudReady
+              ? ' AI is offline on this device right now.'
+              : ' AI is ready.'}{' '}
+            You can turn answers into flashcards.
+          </Text>
+
+          <View style={styles.chat}>
+            {messages.map((m, i) => (
+              <Card
+                key={`${m.role}-${i}`}
+                style={[
+                  styles.bubble,
+                  m.role === 'user' ? styles.userBubble : styles.botBubble,
+                ]}
+              >
+                <Text style={styles.bubbleText}>{m.text}</Text>
+                {m.role === 'assistant' && m.allowFlashcards ? (
+                  <PrimaryButton
+                    label={
+                      makingCards && cardSource?.reply === m.text
+                        ? 'Creating cards…'
+                        : 'Make flashcards'
+                    }
+                    variant="secondary"
+                    onPress={() => void startFlashcardsFromReply(m.text, i)}
+                    style={styles.cardAction}
+                  />
+                ) : null}
+              </Card>
+            ))}
+          </View>
+        </ScrollView>
+
+        <View
+          style={[
+            styles.composer,
+            {
+              paddingBottom: keyboardVisible
+                ? 10
+                : Math.max(insets.bottom, 10),
+            },
+          ]}
+        >
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            placeholder="Ask a study question..."
+            placeholderTextColor={colors.muted}
+            style={styles.input}
+            multiline
+            editable={!busy}
+            onFocus={() => {
+              requestAnimationFrame(() => {
+                scrollRef.current?.scrollToEnd({ animated: true });
+              });
+            }}
+          />
+          <PrimaryButton
+            label={busy ? '…' : 'Send'}
+            onPress={() => void send()}
+            style={{ minWidth: 88, opacity: busy ? 0.7 : 1 }}
+          />
+        </View>
       </View>
 
       <AppModal

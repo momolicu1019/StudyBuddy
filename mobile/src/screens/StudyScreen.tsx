@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   PanResponder,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,6 +15,7 @@ import type { Flashcard } from '../api/types';
 import { Card, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
+import { explanationToBullets } from '../storage/explanationFormat';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Study'>;
@@ -33,8 +35,10 @@ export function StudyScreen({ route, navigation }: Props) {
   const indexRef = useRef(0);
   const cardsRef = useRef<Flashcard[]>([]);
   const markingRef = useRef<Set<number>>(new Set());
+  const flippedRef = useRef(false);
   indexRef.current = index;
   cardsRef.current = cards;
+  flippedRef.current = flipped;
 
   useEffect(() => {
     let alive = true;
@@ -87,7 +91,7 @@ export function StudyScreen({ route, navigation }: Props) {
     [applySubjectUpdate, setStats, showToast, subjectId],
   );
 
-  function revealExplanation() {
+  const revealExplanation = useCallback(() => {
     setFlipped((wasFlipped) => {
       const next = !wasFlipped;
       if (!wasFlipped && next) {
@@ -96,20 +100,19 @@ export function StudyScreen({ route, navigation }: Props) {
       }
       return next;
     });
-  }
+  }, [markCardMastered]);
 
-  function goPrevious() {
+  const goPrevious = useCallback(() => {
     if (indexRef.current <= 0) {
       showToast('This is the first card');
       return;
     }
     setFlipped(false);
     setIndex((i) => Math.max(0, i - 1));
-  }
+  }, [showToast]);
 
-  function goNext() {
+  const goNext = useCallback(() => {
     const current = cardsRef.current[indexRef.current];
-    // Advancing after reading counts as mastered even if they didn't flip first.
     if (current && !current.mastered) {
       void markCardMastered(current.id);
     }
@@ -120,13 +123,13 @@ export function StudyScreen({ route, navigation }: Props) {
     }
     setFlipped(false);
     setIndex((i) => Math.min(cardsRef.current.length - 1, i + 1));
-  }
+  }, [markCardMastered, showToast]);
 
   const panResponder = useMemo(
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gesture) =>
-          Math.abs(gesture.dx) > 10 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+          Math.abs(gesture.dx) > 12 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
         onPanResponderRelease: (_, gesture) => {
           if (gesture.dx <= -SWIPE_THRESHOLD) {
             goNext();
@@ -134,15 +137,10 @@ export function StudyScreen({ route, navigation }: Props) {
           }
           if (gesture.dx >= SWIPE_THRESHOLD) {
             goPrevious();
-            return;
-          }
-          if (Math.abs(gesture.dx) < 10 && Math.abs(gesture.dy) < 10) {
-            revealExplanation();
           }
         },
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable via refs
-    [markCardMastered, showToast],
+    [goNext, goPrevious],
   );
 
   if (loading) {
@@ -179,6 +177,7 @@ export function StudyScreen({ route, navigation }: Props) {
   }
 
   const card = cards[index];
+  const explanationBullets = explanationToBullets(card.answer || '');
   const atStart = index <= 0;
   const atEnd = index >= cards.length - 1;
   const masteredCount = cards.filter((c) => c.mastered).length;
@@ -196,20 +195,51 @@ export function StudyScreen({ route, navigation }: Props) {
       <View style={{ flex: 1 }} {...panResponder.panHandlers}>
         <Card style={[styles.card, flipped ? styles.cardFlipped : undefined]}>
           <Text style={styles.label}>{flipped ? 'Explanation' : 'Key concept'}</Text>
-          <ScrollView
-            style={styles.bodyScroll}
-            contentContainerStyle={styles.bodyContent}
-            showsVerticalScrollIndicator={flipped}
-          >
-            <Text style={[styles.prompt, flipped && styles.promptExplanation]}>
-              {flipped ? card.answer : card.question}
-            </Text>
-          </ScrollView>
-          <Text style={styles.hint}>
-            {card.mastered
-              ? 'Mastered · Tap to flip · Swipe to change cards'
-              : 'Tap to reveal explanation (marks mastered) · Swipe/Next also saves progress'}
-          </Text>
+
+          {flipped ? (
+            <ScrollView
+              style={styles.bodyScroll}
+              contentContainerStyle={styles.bodyContent}
+              showsVerticalScrollIndicator
+              keyboardShouldPersistTaps="handled"
+            >
+              <Pressable onPress={revealExplanation}>
+                {explanationBullets.length ? (
+                  <View style={styles.bulletList}>
+                    {explanationBullets.map((line, i) => (
+                      <View key={`${i}-${line.slice(0, 24)}`} style={styles.bulletRow}>
+                        <Text style={styles.bulletMark}>•</Text>
+                        <Text style={[styles.prompt, styles.promptExplanation]}>
+                          {line}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={[styles.prompt, styles.promptExplanation]}>
+                    No explanation saved for this card.
+                  </Text>
+                )}
+              </Pressable>
+            </ScrollView>
+          ) : (
+            <Pressable
+              style={styles.frontPress}
+              onPress={revealExplanation}
+              accessibilityRole="button"
+              accessibilityLabel="Reveal explanation"
+            >
+              <Text style={styles.prompt}>{card.question}</Text>
+              <Text style={styles.tapCue}>Tap to reveal explanation</Text>
+            </Pressable>
+          )}
+
+          <PrimaryButton
+            label={flipped ? 'Show key concept' : 'Show explanation'}
+            variant="secondary"
+            onPress={revealExplanation}
+            style={{ marginTop: 12 }}
+          />
         </Card>
       </View>
 
@@ -256,6 +286,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
   },
+  frontPress: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    paddingVertical: 12,
+  },
   bodyScroll: { flexGrow: 1, flexShrink: 1 },
   bodyContent: {
     flexGrow: 1,
@@ -272,12 +308,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   promptExplanation: {
+    flex: 1,
     fontSize: 16,
     fontWeight: '600',
     lineHeight: 24,
     textAlign: 'left',
   },
-  hint: { marginTop: 16, color: colors.muted, textAlign: 'center' },
+  bulletList: {
+    gap: 10,
+    width: '100%',
+  },
+  bulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 4,
+  },
+  bulletMark: {
+    color: colors.primary,
+    fontSize: 16,
+    fontWeight: '800',
+    lineHeight: 24,
+    width: 14,
+  },
+  tapCue: {
+    marginTop: 18,
+    color: colors.muted,
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   row: { flexDirection: 'row', gap: 10, marginTop: 16, marginBottom: 8 },
   h2: { fontSize: 22, fontWeight: '800', color: colors.ink },
   sub: { color: colors.muted },

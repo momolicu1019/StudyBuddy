@@ -241,19 +241,12 @@ function answerFromNotes(ctx: TutorContext): string {
   }
 
   // No notes + no API: be honest, but still engage the actual question.
-  const keyTerms = tokenize(question).slice(0, 6);
-  const termLine =
-    keyTerms.length > 0
-      ? `Key terms in your question: ${keyTerms.join(', ')}.`
-      : '';
-
   return (
     `I couldn't find matching flashcards for that yet.\n\n` +
     `You asked: “${question}”\n\n` +
-    `${termLine}\n` +
     (isAiConfigured()
-      ? 'Your Gemini key is loaded, but this reply fell back to offline mode. Try again in a moment.'
-      : 'Restart Expo with a clean cache so your Gemini key in mobile/.env is picked up (`npx expo start -c`).') +
+      ? 'Live AI could not answer this one. Try again in a moment.'
+      : 'Add EXPO_PUBLIC_AI_API_KEY in mobile/.env and restart with `npx expo start -c`.') +
     '\n\nTip: generate flashcards from your notes first, then ask about those topics.'
   );
 }
@@ -277,11 +270,16 @@ export async function answerTutorQuestion(
     if (cloud) return { reply: cloud };
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'AI request failed';
-    // Fall through to local notes, but surface the issue briefly when notes are thin.
-    const local = answerFromNotes({ ...ctx, message: text });
-    return {
-      reply: `${local}\n\n(Cloud AI unavailable: ${detail})`,
-    };
+    // Prefer a clear cloud failure over a long offline fallback dump.
+    if (isAiConfigured()) {
+      const short = detail.replace(/^Gemini request failed \(\d+\):\s*/i, '');
+      return {
+        reply:
+          `I couldn't get a live AI answer just now.\n\n${short}\n\n` +
+          'If this keeps happening, set EXPO_PUBLIC_AI_MODEL=gemini-flash-latest in mobile/.env and restart Expo.',
+      };
+    }
+    return { reply: answerFromNotes({ ...ctx, message: text }) };
   }
 
   return { reply: answerFromNotes({ ...ctx, message: text }) };

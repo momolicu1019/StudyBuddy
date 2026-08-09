@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -14,7 +14,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { AppModal, PrimaryButton } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { colors } from '../theme/colors';
 
@@ -30,15 +29,9 @@ const BENEFITS = [
 export function LoginScreen() {
   const { width } = useWindowDimensions();
   const showBrandPanel = width >= 850;
-  const {
-    signInWithGoogle,
-    signInWithEmail,
-    createAccount,
-    skipLogin,
-    googleConfigured,
-  } = useAuth();
+  const { signInWithEmail, createAccount, skipLogin } = useAuth();
 
-  const [mode, setMode] = useState<Mode>('signin');
+  const [mode, setMode] = useState<Mode>('signup');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -55,14 +48,6 @@ export function LoginScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [googleModal, setGoogleModal] = useState(false);
-  const [googleName, setGoogleName] = useState('');
-  const [googleEmail, setGoogleEmail] = useState('');
-
-  const googleLabel = useMemo(
-    () => (mode === 'signin' ? 'Continue with Google' : 'Sign up with Google'),
-    [mode],
-  );
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -81,7 +66,6 @@ export function LoginScreen() {
         setError(result.message);
         return;
       }
-      // Session is set in AuthContext — navigator leaves this screen.
     } catch {
       setError('Could not sign in. Please try again.');
     } finally {
@@ -102,6 +86,11 @@ export function LoginScreen() {
       setBusy(false);
       return;
     }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError('Please enter a valid email address.');
+      setBusy(false);
+      return;
+    }
     if (signupPassword.length < 8) {
       setError('Password must contain at least 8 characters.');
       setBusy(false);
@@ -119,56 +108,11 @@ export function LoginScreen() {
         setError(result.message);
         return;
       }
-      // Session is set — navigator leaves this screen.
     } catch {
       setError('Could not create account. Please try again.');
     } finally {
       setBusy(false);
     }
-  }
-
-  async function onGoogle() {
-    setError(null);
-    setMessage(null);
-    if (!googleConfigured) {
-      setGoogleName(fullName.trim() || googleName);
-      setGoogleEmail(signupEmail.trim() || loginEmail.trim() || googleEmail);
-      setGoogleModal(true);
-      return;
-    }
-    await completeGoogleSignIn();
-  }
-
-  async function completeGoogleSignIn(profile?: { name?: string; email?: string }) {
-    setBusy(true);
-    setMessage(null);
-    setError(null);
-    try {
-      const result = await signInWithGoogle(profile);
-      if (!result.ok) {
-        setError(result.message);
-        return;
-      }
-      setGoogleModal(false);
-    } catch {
-      setError('Could not sign in with Google. Please try again.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onConfirmGoogleDemo() {
-    const name = googleName.trim();
-    const email = googleEmail.trim().toLowerCase();
-    if (!name) {
-      setError('Please enter your name for Google sign-in.');
-      return;
-    }
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setError('Please enter a valid Google email.');
-      return;
-    }
-    await completeGoogleSignIn({ name, email });
   }
 
   return (
@@ -262,8 +206,10 @@ export function LoginScreen() {
 
               {mode === 'signin' ? (
                 <View>
-                  <Text style={styles.h2}>Welcome back 👋</Text>
-                  <Text style={styles.subtitle}>Ready to continue learning?</Text>
+                  <Text style={styles.h2}>Welcome back</Text>
+                  <Text style={styles.subtitle}>
+                    Sign in with the email you used to create your account.
+                  </Text>
 
                   <View style={styles.form}>
                     <Field label="Email address">
@@ -294,7 +240,7 @@ export function LoginScreen() {
                           style={styles.eye}
                           onPress={() => setShowLoginPassword((v) => !v)}
                         >
-                          <Text>{showLoginPassword ? '🙈' : '👁'}</Text>
+                          <Text>{showLoginPassword ? 'Hide' : 'Show'}</Text>
                         </Pressable>
                       </View>
                     </Field>
@@ -344,19 +290,6 @@ export function LoginScreen() {
                     </Pressable>
                   </View>
 
-                  <Divider />
-                  <GoogleButton
-                    label={googleLabel}
-                    busy={busy}
-                    onPress={() => void onGoogle()}
-                  />
-                  {!googleConfigured ? (
-                    <Text style={styles.hint}>
-                      Continues with a Google-style session on this device. Add
-                      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for full Google OAuth + Drive backup.
-                    </Text>
-                  ) : null}
-
                   <Text style={styles.prompt}>
                     Don't have an account?{' '}
                     <Text style={styles.link} onPress={() => switchMode('signup')}>
@@ -366,9 +299,9 @@ export function LoginScreen() {
                 </View>
               ) : (
                 <View>
-                  <Text style={styles.h2}>Create your account 🎓</Text>
+                  <Text style={styles.h2}>Create your account</Text>
                   <Text style={styles.subtitle}>
-                    Let's set up your personal study space.
+                    Use your email to set up a study profile on this device.
                   </Text>
 
                   <View style={styles.form}>
@@ -411,7 +344,7 @@ export function LoginScreen() {
                           style={styles.eye}
                           onPress={() => setShowSignupPassword((v) => !v)}
                         >
-                          <Text>{showSignupPassword ? '🙈' : '👁'}</Text>
+                          <Text>{showSignupPassword ? 'Hide' : 'Show'}</Text>
                         </Pressable>
                       </View>
                     </Field>
@@ -434,7 +367,7 @@ export function LoginScreen() {
                           style={styles.eye}
                           onPress={() => setShowConfirmPassword((v) => !v)}
                         >
-                          <Text>{showConfirmPassword ? '🙈' : '👁'}</Text>
+                          <Text>{showConfirmPassword ? 'Hide' : 'Show'}</Text>
                         </Pressable>
                       </View>
                       {passwordError ? (
@@ -462,23 +395,9 @@ export function LoginScreen() {
                     </Pressable>
                   </View>
 
-                  <Divider />
-                  <GoogleButton
-                    label={googleLabel}
-                    busy={busy}
-                    onPress={() => void onGoogle()}
-                  />
-                  {!googleConfigured ? (
-                    <Text style={styles.hint}>
-                      Continues with a Google-style session on this device. Add
-                      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for full Google OAuth + Drive backup.
-                    </Text>
-                  ) : null}
-
                   <Text style={styles.terms}>
-                    By creating an account, you agree to our{' '}
-                    <Text style={styles.link}>Terms of Service</Text> and{' '}
-                    <Text style={styles.link}>Privacy Policy</Text>.
+                    By creating an account, you agree to our Terms of Service and
+                    Privacy Policy.
                   </Text>
 
                   <Text style={styles.prompt}>
@@ -497,47 +416,6 @@ export function LoginScreen() {
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
-
-      <AppModal visible={googleModal} onClose={() => setGoogleModal(false)}>
-        <Text style={styles.h2}>Continue with Google</Text>
-        <Text style={[styles.subtitle, { marginTop: 8 }]}>
-          Enter the name and email you want on your Study Buddy profile.
-        </Text>
-        <Field label="Full name">
-          <TextInput
-            value={googleName}
-            onChangeText={setGoogleName}
-            placeholder="e.g. Nino"
-            placeholderTextColor={colors.muted}
-            style={styles.input}
-          />
-        </Field>
-        <Field label="Google email">
-          <TextInput
-            value={googleEmail}
-            onChangeText={setGoogleEmail}
-            placeholder="you@gmail.com"
-            placeholderTextColor={colors.muted}
-            autoCapitalize="none"
-            keyboardType="email-address"
-            style={styles.input}
-          />
-        </Field>
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-        <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
-          <PrimaryButton
-            label="Cancel"
-            variant="secondary"
-            onPress={() => setGoogleModal(false)}
-            style={{ flex: 1 }}
-          />
-          <PrimaryButton
-            label={busy ? 'Signing in…' : 'Continue'}
-            onPress={() => void onConfirmGoogleDemo()}
-            style={{ flex: 1, opacity: busy ? 0.7 : 1 }}
-          />
-        </View>
-      </AppModal>
     </SafeAreaView>
   );
 }
@@ -554,39 +432,6 @@ function Field({
       <Text style={styles.label}>{label}</Text>
       {children}
     </View>
-  );
-}
-
-function Divider() {
-  return (
-    <View style={styles.divider}>
-      <View style={styles.dividerLine} />
-      <Text style={styles.dividerText}>OR</Text>
-      <View style={styles.dividerLine} />
-    </View>
-  );
-}
-
-function GoogleButton({
-  label,
-  busy,
-  onPress,
-}: {
-  label: string;
-  busy: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      style={[styles.googleBtn, busy && { opacity: 0.7 }]}
-      disabled={busy}
-      onPress={onPress}
-    >
-      <View style={styles.googleBadge}>
-        <Text style={styles.googleG}>G</Text>
-      </View>
-      <Text style={styles.googleText}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -714,7 +559,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontSize: 15,
   },
-  inputWithEye: { paddingRight: 44 },
+  inputWithEye: { paddingRight: 52 },
   eye: {
     position: 'absolute',
     right: 8,
@@ -756,41 +601,6 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   primaryBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginVertical: 20,
-  },
-  dividerLine: { flex: 1, height: 1, backgroundColor: '#E7E7F0' },
-  dividerText: { color: '#9A9DAF', fontSize: 12, fontWeight: '700' },
-  googleBtn: {
-    width: '100%',
-    paddingVertical: 12,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: '#E7E7F0',
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  googleBadge: {
-    width: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleG: { color: '#4285F4', fontWeight: '900', fontSize: 18 },
-  googleText: { color: colors.ink, fontWeight: '750' as unknown as '700', fontSize: 15 },
-  hint: {
-    marginTop: 10,
-    color: colors.muted,
-    fontSize: 12,
-    lineHeight: 17,
-    textAlign: 'center',
-  },
   terms: {
     fontSize: 11,
     color: colors.muted,

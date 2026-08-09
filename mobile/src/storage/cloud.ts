@@ -1,10 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { LocalDatabase } from './schema';
-import { loadLocalDb, saveLocalDb } from './store';
+import {
+  exportFlashcardsAsPdfs,
+  restoreFlashcardsFromPdfs,
+} from './pdfBackup';
 
 const AUTH_KEY = 'studybuddy.auth.v1';
-const CLOUD_BACKUP_KEY = 'studybuddy.cloud.backup.v1';
 const LOCAL_ACCOUNTS_KEY = 'studybuddy.local.accounts.v1';
 
 export type AuthUser = {
@@ -13,9 +14,7 @@ export type AuthUser = {
   name: string;
   photoUrl?: string;
   provider: 'google' | 'email';
-  /** Access token for Drive API when real Google OAuth is configured. */
   accessToken?: string;
-  /** Demo sessions work without Google Cloud credentials. */
   isDemo: boolean;
 };
 
@@ -85,7 +84,10 @@ export async function createLocalAccount(input: {
 
   const accounts = await loadLocalAccounts();
   if (accounts[email]) {
-    return { ok: false, message: 'An account with this email already exists. Sign in instead.' };
+    return {
+      ok: false,
+      message: 'An account with this email already exists. Sign in instead.',
+    };
   }
 
   const record: LocalAccountRecord = {
@@ -129,7 +131,7 @@ export async function signInLocalAccount(input: {
 
   return {
     ok: true,
-    message: 'Signed in successfully.',
+    message: `Welcome back, ${record.name}!`,
     user: {
       id: record.id,
       email: record.email,
@@ -162,218 +164,26 @@ export async function clearAuthState(): Promise<void> {
   await AsyncStorage.removeItem(AUTH_KEY);
 }
 
-type GoogleExtra = {
-  googleWebClientId?: string;
-  googleIosClientId?: string;
-  googleAndroidClientId?: string;
-};
-
-function readGoogleExtra(): GoogleExtra {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Constants = require('expo-constants').default as {
-      expoConfig?: { extra?: GoogleExtra };
-    };
-    return Constants.expoConfig?.extra ?? {};
-  } catch {
-    return {};
-  }
+/** Backup: export each subject folder as a PDF (shared as a zip). */
+export async function backupLocalData(
+  _user?: AuthUser,
+): Promise<CloudActionResult> {
+  return exportFlashcardsAsPdfs();
 }
 
-export type GoogleOAuthConfig = {
-  webClientId: string;
-  iosClientId: string;
-  androidClientId: string;
-};
-
-export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
-  const extra = readGoogleExtra();
-  const webClientId = (
-    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
-    extra.googleWebClientId ||
-    ''
-  ).trim();
-  if (!webClientId) return null;
-
-  const iosClientId = (
-    process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ||
-    extra.googleIosClientId ||
-    webClientId
-  ).trim();
-
-  const androidClientId = (
-    process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
-    extra.googleAndroidClientId ||
-    webClientId
-  ).trim();
-
-  return { webClientId, iosClientId, androidClientId };
+/** Restore: pick PDF file(s) and regenerate flashcards with Gemini. */
+export async function restoreLocalData(
+  _user?: AuthUser,
+): Promise<CloudActionResult> {
+  return restoreFlashcardsFromPdfs();
 }
 
+/** @deprecated Google OAuth is no longer used for login/backup. */
 export function isGoogleOAuthConfigured(): boolean {
-  return Boolean(getGoogleOAuthConfig()?.webClientId);
+  return false;
 }
 
+/** @deprecated Google OAuth is no longer used for login/backup. */
 export function getGoogleWebClientId(): string | undefined {
-  return getGoogleOAuthConfig()?.webClientId;
-}
-
-/**
- * Backup local DB into Google Drive App Data when a real token exists;
- * otherwise keep a private on-device cloud mirror keyed by Google account.
- */
-export async function backupLocalData(user: AuthUser): Promise<CloudActionResult> {
-  const db = await loadLocalDb();
-  const stamped = {
-    ...db,
-    settings: { ...db.settings, cloud_sync_enabled: true },
-  };
-  const now = new Date().toISOString();
-
-  if (user.accessToken && !user.isDemo) {
-    try {
-      await uploadToGoogleDriveAppData(user.accessToken, stamped);
-      return {
-        ok: true,
-        message: 'Backup saved to your Google Drive (App Data).',
-        lastSyncedAt: now,
-      };
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Drive upload failed';
-      return { ok: false, message: detail };
-    }
-  }
-
-  // Local mirror for demo / Expo Go without Google Cloud credentials.
-  const mirrors = await loadLocalMirrors();
-  mirrors[user.id] = { updatedAt: now, database: stamped };
-  await AsyncStorage.setItem(CLOUD_BACKUP_KEY, JSON.stringify(mirrors));
-
-  return {
-    ok: true,
-    message: user.isDemo
-      ? 'Demo backup saved for this Google account on this device.'
-      : 'Backup saved for your Google account on this device.',
-    lastSyncedAt: now,
-  };
-}
-
-export async function restoreLocalData(user: AuthUser): Promise<CloudActionResult> {
-  const now = new Date().toISOString();
-
-  if (user.accessToken && !user.isDemo) {
-    try {
-      const remote = await downloadFromGoogleDriveAppData(user.accessToken);
-      if (!remote) {
-        return {
-          ok: false,
-          message: 'No Google Drive backup found yet. Create one with Backup now.',
-        };
-      }
-      await saveLocalDb(remote);
-      return {
-        ok: true,
-        message: 'Restored study data from Google Drive.',
-        lastSyncedAt: now,
-      };
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Drive restore failed';
-      return { ok: false, message: detail };
-    }
-  }
-
-  const mirrors = await loadLocalMirrors();
-  const mirror = mirrors[user.id];
-  if (!mirror) {
-    return {
-      ok: false,
-      message: 'No backup found for this account yet. Tap Backup now first.',
-    };
-  }
-  await saveLocalDb(mirror.database);
-  return {
-    ok: true,
-    message: 'Restored study data from your Google backup.',
-    lastSyncedAt: mirror.updatedAt,
-  };
-}
-
-type MirrorMap = Record<string, { updatedAt: string; database: LocalDatabase }>;
-
-async function loadLocalMirrors(): Promise<MirrorMap> {
-  try {
-    const raw = await AsyncStorage.getItem(CLOUD_BACKUP_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as MirrorMap;
-  } catch {
-    return {};
-  }
-}
-
-const BACKUP_FILENAME = 'studybuddy-backup.json';
-
-async function uploadToGoogleDriveAppData(
-  accessToken: string,
-  database: LocalDatabase,
-): Promise<void> {
-  const existingId = await findDriveBackupFileId(accessToken);
-  const metadata = {
-    name: BACKUP_FILENAME,
-    parents: ['appDataFolder'],
-  };
-  const boundary = `studybuddy_${Date.now()}`;
-  const body =
-    `--${boundary}\r\n` +
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-    `${JSON.stringify(metadata)}\r\n` +
-    `--${boundary}\r\n` +
-    'Content-Type: application/json\r\n\r\n' +
-    `${JSON.stringify(database)}\r\n` +
-    `--${boundary}--`;
-
-  const url = existingId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart`
-    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-
-  const response = await fetch(url, {
-    method: existingId ? 'PATCH' : 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': `multipart/related; boundary=${boundary}`,
-    },
-    body,
-  });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-}
-
-async function downloadFromGoogleDriveAppData(
-  accessToken: string,
-): Promise<LocalDatabase | null> {
-  const fileId = await findDriveBackupFileId(accessToken);
-  if (!fileId) return null;
-
-  const response = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
-  );
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return (await response.json()) as LocalDatabase;
-}
-
-async function findDriveBackupFileId(accessToken: string): Promise<string | null> {
-  const query = encodeURIComponent(`name='${BACKUP_FILENAME}'`);
-  const response = await fetch(
-    `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=${query}&fields=files(id,name)`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
-  );
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  const data = (await response.json()) as { files?: { id: string }[] };
-  return data.files?.[0]?.id ?? null;
+  return undefined;
 }

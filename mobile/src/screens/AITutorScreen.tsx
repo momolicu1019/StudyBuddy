@@ -1,5 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -8,7 +9,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+import { useHeaderHeight } from '@react-navigation/elements';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api } from '../api/client';
 import { Card, PrimaryButton } from '../components/ui';
@@ -24,9 +28,13 @@ type ChatItem = { role: 'user' | 'assistant'; text: string };
 export function AITutorScreen({ route }: Props) {
   const subject = route.params?.subject;
   const { showToast } = useApp();
+  const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
+  const tabBarHeight = useContext(BottomTabBarHeightContext) ?? 0;
   const scrollRef = useRef<ScrollView>(null);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const cloudReady = isCloudTutorConfigured();
   const [messages, setMessages] = useState<ChatItem[]>([
     {
@@ -36,6 +44,24 @@ export function AITutorScreen({ route }: Props) {
         : `Hi! I'm your Study Buddy AI Tutor. Ask a content question (for example “What is photosynthesis?”) and I'll answer it${cloudReady ? '' : ' from your flashcards, or with AI once a key is configured'}.`,
     },
   ]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, () => {
+      setKeyboardVisible(true);
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      });
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardVisible(false);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   async function send() {
     const text = input.trim();
@@ -71,16 +97,22 @@ export function AITutorScreen({ route }: Props) {
     }
   }
 
+  // Stack header + tab bar (when opened from tabs) so the composer clears the keyboard.
+  const keyboardOffset =
+    headerHeight + (Platform.OS === 'ios' ? Math.max(tabBarHeight, 8) : 12);
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      behavior="padding"
+      keyboardVerticalOffset={keyboardOffset}
     >
       <ScrollView
         ref={scrollRef}
+        style={styles.chatScroll}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
       >
         <Text style={styles.h1}>✦ AI Tutor</Text>
@@ -107,7 +139,17 @@ export function AITutorScreen({ route }: Props) {
         </View>
       </ScrollView>
 
-      <View style={styles.composer}>
+      <View
+        style={[
+          styles.composer,
+          {
+            paddingBottom: Math.max(
+              insets.bottom,
+              keyboardVisible && Platform.OS === 'android' ? 10 : insets.bottom || 10,
+            ),
+          },
+        ]}
+      >
         <TextInput
           value={input}
           onChangeText={setInput}
@@ -116,6 +158,11 @@ export function AITutorScreen({ route }: Props) {
           style={styles.input}
           multiline
           editable={!busy}
+          onFocus={() => {
+            requestAnimationFrame(() => {
+              scrollRef.current?.scrollToEnd({ animated: true });
+            });
+          }}
         />
         <PrimaryButton
           label={busy ? '…' : 'Send'}
@@ -129,7 +176,8 @@ export function AITutorScreen({ route }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 16, paddingBottom: 20 },
+  chatScroll: { flex: 1 },
+  content: { padding: 16, paddingBottom: 24, flexGrow: 1 },
   h1: { fontSize: 30, fontWeight: '800', color: colors.ink },
   sub: { color: colors.muted, marginTop: 6, marginBottom: 18, lineHeight: 20 },
   chat: { gap: 12 },
@@ -144,7 +192,8 @@ const styles = StyleSheet.create({
   composer: {
     flexDirection: 'row',
     gap: 10,
-    padding: 14,
+    paddingHorizontal: 14,
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: colors.line,
     backgroundColor: '#fff',

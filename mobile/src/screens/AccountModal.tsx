@@ -13,15 +13,7 @@ type Props = {
 
 export function AccountModal({ visible, onClose }: Props) {
   const { refresh, showToast } = useApp();
-  const {
-    session,
-    isSignedIn,
-    googleConfigured,
-    signInWithGoogle,
-    backupNow,
-    restoreNow,
-    signOut,
-  } = useAuth();
+  const { session, isSignedIn, backupNow, restoreNow, signOut } = useAuth();
   const initials = useAuthInitials();
   const [busy, setBusy] = useState(false);
 
@@ -46,52 +38,34 @@ export function AccountModal({ visible, onClose }: Props) {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>
-            {isSignedIn ? session?.user.name : 'Local account'}
+            {isSignedIn ? session?.user.name : 'Guest'}
           </Text>
           <Text style={styles.sub}>
             {isSignedIn
               ? session?.user.email
-              : 'Studying offline — sign in to enable Google backup'}
+              : 'Studying offline — create an email account to manage PDF backups'}
           </Text>
         </View>
       </View>
 
       <View style={styles.meta}>
-        <Text style={styles.metaLabel}>Backup status</Text>
+        <Text style={styles.metaLabel}>PDF backup</Text>
         <Text style={styles.metaValue}>
           {isSignedIn
             ? session?.lastSyncedAt
-              ? `Last synced ${new Date(session.lastSyncedAt).toLocaleString()}`
-              : 'Signed in · no backup yet'
-            : 'Not signed in'}
+              ? `Last export ${new Date(session.lastSyncedAt).toLocaleString()}`
+              : 'Export subject folders as PDFs anytime'
+            : 'Sign in to export or restore flashcard PDFs'}
         </Text>
-        {session?.user.isDemo || session?.user.provider === 'email' ? (
+        {isSignedIn ? (
           <Text style={[styles.sub, { marginTop: 6 }]}>
-            {session?.user.provider === 'google'
-              ? `Demo Google session${googleConfigured ? '' : ' (add EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for Drive)'}`
-              : 'Email account · use Backup now to save on this device'}
+            Backup downloads one PDF per subject. Restore picks PDFs and rebuilds
+            cards with Gemini.
           </Text>
         ) : null}
       </View>
 
-      {!isSignedIn ? (
-        <PrimaryButton
-          label={busy ? 'Signing in…' : 'Continue with Google'}
-          onPress={() =>
-            void run(() =>
-              signInWithGoogle(
-                googleConfigured
-                  ? undefined
-                  : {
-                      name: session?.user.name || 'Study Buddy Student',
-                      email: session?.user.email || 'student@gmail.com',
-                    },
-              ),
-            )
-          }
-          style={{ marginTop: 16 }}
-        />
-      ) : (
+      {isSignedIn ? (
         <View style={{ gap: 10, marginTop: 16 }}>
           <PrimaryButton
             label={busy ? 'Working…' : 'Backup now'}
@@ -108,11 +82,19 @@ export function AccountModal({ visible, onClose }: Props) {
             onPress={() =>
               void run(async () => {
                 await signOut();
-                return { ok: true, message: 'Signed out. Local data stays on this device.' };
+                return {
+                  ok: true,
+                  message: 'Signed out. Local data stays on this device.',
+                };
               })
             }
           />
         </View>
+      ) : (
+        <Text style={[styles.sub, { marginTop: 16 }]}>
+          Create an email account from the login screen to export and restore PDF
+          backups.
+        </Text>
       )}
 
       <PrimaryButton

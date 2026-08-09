@@ -172,11 +172,6 @@ export function FlashcardsScreen() {
               <Text style={styles.sub}>
                 No subject folders yet. Create one, then upload a PDF or photo.
               </Text>
-              <PrimaryButton
-                label="+ Create Subject"
-                onPress={() => openFolderModal()}
-                style={{ marginTop: 12 }}
-              />
             </View>
           ) : (
             filtered.map((s) => {

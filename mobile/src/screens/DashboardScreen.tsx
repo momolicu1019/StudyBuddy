@@ -220,10 +220,7 @@ export function DashboardScreen() {
         <Card style={styles.upload}>
           <IconBubble size={58}>📚</IconBubble>
           <Text style={styles.uploadTitle}>Create flashcards from your notes</Text>
-          <Text style={styles.subCenter}>
-            1) Upload PDF/photo · 2) Gemini analyzes it · 3) Summary becomes review
-            flashcards
-          </Text>
+          <Text style={styles.subCenter}>Upload a PDF or take a photo</Text>
           <View style={styles.row}>
             <PrimaryButton label="📄 Upload PDF" onPress={pickPdf} style={styles.flexBtn} />
             <PrimaryButton
@@ -275,12 +272,6 @@ export function DashboardScreen() {
               title: 'Quiz Mode',
               desc: 'Test what you know and track your score.',
               onPress: () => navigation.navigate('Quiz', {}),
-            },
-            {
-              icon: '🔊',
-              title: 'Voice Explain',
-              desc: 'Listen to difficult topics explained simply.',
-              onPress: () => showToast('Voice explanation ready'),
             },
             {
               icon: '✨',

@@ -1,10 +1,18 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { NavigationContainer, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Toast } from '../components/ui';
 import { useApp } from '../context/AppContext';
@@ -22,6 +30,39 @@ import type { MainTabParamList, RootStackParamList } from './types';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+
+const TAB_META: Record<
+  keyof MainTabParamList,
+  { title: string; icon: IoniconName; iconFocused: IoniconName }
+> = {
+  Dashboard: {
+    title: 'Home',
+    icon: 'home-outline',
+    iconFocused: 'home',
+  },
+  FlashcardsTab: {
+    title: 'Cards',
+    icon: 'albums-outline',
+    iconFocused: 'albums',
+  },
+  QuizTab: {
+    title: 'Quiz',
+    icon: 'checkbox-outline',
+    iconFocused: 'checkbox',
+  },
+  AITutorTab: {
+    title: 'Tutor',
+    icon: 'sparkles-outline',
+    iconFocused: 'sparkles',
+  },
+  PomodoroTab: {
+    title: 'Focus',
+    icon: 'timer-outline',
+    iconFocused: 'timer',
+  },
+};
 
 function BrandHeader() {
   const initials = useAuthInitials();
@@ -45,69 +86,64 @@ function BrandHeader() {
   );
 }
 
-function TabIcon({ label, focused }: { label: string; focused: boolean }) {
-  const map: Record<string, string> = {
-    Dashboard: '⌂',
-    Flashcards: '▣',
-    Quiz: '✓',
-    'AI Tutor': '✦',
-    Pomodoro: '◷',
-  };
+function TabIcon({
+  routeName,
+  focused,
+}: {
+  routeName: keyof MainTabParamList;
+  focused: boolean;
+}) {
+  const meta = TAB_META[routeName];
   return (
-    <Text style={{ color: focused ? colors.primary : colors.muted, fontSize: 16 }}>
-      {map[label] ?? '•'}
-    </Text>
+    <View style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}>
+      <Ionicons
+        name={focused ? meta.iconFocused : meta.icon}
+        size={20}
+        color={focused ? colors.primary : colors.muted}
+      />
+    </View>
   );
 }
 
 function MainTabs() {
+  const insets = useSafeAreaInsets();
+  const bottomPad = Math.max(insets.bottom, Platform.OS === 'ios' ? 10 : 8);
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <BrandHeader />
       <Tab.Navigator
-        screenOptions={({ route }) => ({
-          headerShown: false,
-          tabBarActiveTintColor: colors.primary,
-          tabBarInactiveTintColor: colors.muted,
-          tabBarStyle: styles.tabBar,
-          tabBarLabelStyle: styles.tabLabel,
-          tabBarIcon: ({ focused }) => {
-            const labels: Record<string, string> = {
-              Dashboard: 'Dashboard',
-              FlashcardsTab: 'Flashcards',
-              QuizTab: 'Quiz',
-              AITutorTab: 'AI Tutor',
-              PomodoroTab: 'Pomodoro',
-            };
-            return <TabIcon label={labels[route.name]} focused={focused} />;
-          },
-        })}
+        screenOptions={({ route }) => {
+          const meta = TAB_META[route.name as keyof MainTabParamList];
+          return {
+            headerShown: false,
+            tabBarActiveTintColor: colors.primary,
+            tabBarInactiveTintColor: colors.muted,
+            tabBarHideOnKeyboard: true,
+            tabBarStyle: [
+              styles.tabBar,
+              {
+                height: 58 + bottomPad,
+                paddingBottom: bottomPad,
+              },
+            ],
+            tabBarItemStyle: styles.tabItem,
+            tabBarLabelStyle: styles.tabLabel,
+            tabBarLabel: meta.title,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                routeName={route.name as keyof MainTabParamList}
+                focused={focused}
+              />
+            ),
+          };
+        }}
       >
-        <Tab.Screen
-          name="Dashboard"
-          component={DashboardScreen}
-          options={{ title: 'Dashboard' }}
-        />
-        <Tab.Screen
-          name="FlashcardsTab"
-          component={FlashcardsScreen}
-          options={{ title: 'Flashcards' }}
-        />
-        <Tab.Screen
-          name="QuizTab"
-          component={QuizTabScreen}
-          options={{ title: 'Quiz' }}
-        />
-        <Tab.Screen
-          name="AITutorTab"
-          component={AITutorTabScreen}
-          options={{ title: 'AI Tutor' }}
-        />
-        <Tab.Screen
-          name="PomodoroTab"
-          component={PomodoroScreen}
-          options={{ title: 'Pomodoro' }}
-        />
+        <Tab.Screen name="Dashboard" component={DashboardScreen} />
+        <Tab.Screen name="FlashcardsTab" component={FlashcardsScreen} />
+        <Tab.Screen name="QuizTab" component={QuizTabScreen} />
+        <Tab.Screen name="AITutorTab" component={AITutorTabScreen} />
+        <Tab.Screen name="PomodoroTab" component={PomodoroScreen} />
       </Tab.Navigator>
     </SafeAreaView>
   );
@@ -244,11 +280,33 @@ const styles = StyleSheet.create({
   },
   avatarText: { color: colors.primary, fontWeight: '800' },
   tabBar: {
-    backgroundColor: '#fff',
-    borderTopColor: colors.line,
-    height: 64,
-    paddingBottom: 8,
-    paddingTop: 6,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#ECEAF5',
+    paddingTop: 8,
+    elevation: 12,
+    shadowColor: '#1B1840',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: -4 },
   },
-  tabLabel: { fontSize: 11, fontWeight: '700' },
+  tabItem: {
+    paddingTop: 2,
+  },
+  tabLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+    letterSpacing: 0.2,
+  },
+  tabIconWrap: {
+    width: 42,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabIconWrapActive: {
+    backgroundColor: colors.primarySoft,
+  },
 });

@@ -9,10 +9,17 @@ type GenerateOptions = {
   json?: boolean;
 };
 
-function geminiModelEndpoint(model: string, apiKey: string): string {
-  // Prefer native Gemini endpoint (works with AI Studio / Gemini API keys).
+/** Prefer configured model, then known working free-tier fallbacks. */
+const FALLBACK_MODELS = [
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+];
+
+function geminiModelEndpoint(model: string): string {
   const cleanModel = model.replace(/^models\//, '');
-  return `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  return `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent`;
 }
 
 function extractGeminiText(payload: unknown): string {
@@ -30,18 +37,33 @@ function extractGeminiText(payload: unknown): string {
     .trim();
 }
 
-/**
- * Call Gemini generateContent (text and/or inline file parts).
- */
-export async function generateWithGemini(
+function shouldTryNextModel(status: number, detail: string): boolean {
+  if (status === 404) return true;
+  if (status !== 429) return false;
+  return (
+    /limit:\s*0/i.test(detail) ||
+    /no longer available/i.test(detail) ||
+    /deprecated/i.test(detail)
+  );
+}
+
+function shortenGeminiError(status: number, detail: string): string {
+  if (status === 429) {
+    if (/limit:\s*0/i.test(detail) || /deprecated|no longer available/i.test(detail)) {
+      return 'This Gemini model has no free-tier quota (often retired). Update EXPO_PUBLIC_AI_MODEL in mobile/.env (try gemini-flash-latest).';
+    }
+    return 'Gemini rate limit hit. Wait a moment and try again, or check https://ai.dev/rate-limit';
+  }
+  const firstLine = detail.split('\n')[0]?.trim() || detail;
+  return firstLine.slice(0, 220);
+}
+
+async function generateWithGeminiModel(
+  model: string,
+  apiKey: string,
   parts: GeminiPart[],
   options?: GenerateOptions,
 ): Promise<string> {
-  const { apiKey, model } = getAiConfig();
-  if (!apiKey) {
-    throw new Error('AI API key is not configured');
-  }
-
   const body = {
     contents: [
       {
@@ -60,15 +82,16 @@ export async function generateWithGemini(
     ],
     generationConfig: {
       temperature: options?.temperature ?? 0.3,
-      ...(options?.json
-        ? { responseMimeType: 'application/json' }
-        : {}),
+      ...(options?.json ? { responseMimeType: 'application/json' } : {}),
     },
   };
 
-  const response = await fetch(geminiModelEndpoint(model, apiKey), {
+  const response = await fetch(geminiModelEndpoint(model), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
     body: JSON.stringify(body),
   });
 
@@ -84,10 +107,51 @@ export async function generateWithGemini(
     const detail =
       (json as { error?: { message?: string } } | null)?.error?.message ||
       raw.slice(0, 220);
-    throw new Error(`Gemini request failed (${response.status}): ${detail}`);
+    const error = new Error(
+      `Gemini request failed (${response.status}): ${shortenGeminiError(response.status, detail)}`,
+    ) as Error & { status?: number; detail?: string; retryableModel?: boolean };
+    error.status = response.status;
+    error.detail = detail;
+    error.retryableModel = shouldTryNextModel(response.status, detail);
+    throw error;
   }
 
   return extractGeminiText(json);
+}
+
+/**
+ * Call Gemini generateContent (text and/or inline file parts).
+ * Retries alternate models when the configured one is retired / quota=0.
+ */
+export async function generateWithGemini(
+  parts: GeminiPart[],
+  options?: GenerateOptions,
+): Promise<string> {
+  const { apiKey, model } = getAiConfig();
+  if (!apiKey) {
+    throw new Error('AI API key is not configured');
+  }
+
+  const tried = new Set<string>();
+  const queue = [model, ...FALLBACK_MODELS].filter((m) => {
+    const id = m.replace(/^models\//, '');
+    if (tried.has(id)) return false;
+    tried.add(id);
+    return true;
+  });
+
+  let lastError: Error | null = null;
+  for (const candidate of queue) {
+    try {
+      return await generateWithGeminiModel(candidate, apiKey, parts, options);
+    } catch (error) {
+      const err = error as Error & { retryableModel?: boolean };
+      lastError = err;
+      if (!err.retryableModel) throw err;
+    }
+  }
+
+  throw lastError ?? new Error('Gemini request failed');
 }
 
 /**
@@ -101,7 +165,6 @@ export async function generateWithChatCompletions(input: {
   const { apiKey, baseUrl, model } = getAiConfig();
   if (!apiKey) throw new Error('AI API key is not configured');
 
-  // If someone still points at the Gemini OpenAI bridge, keep it working.
   const endpoint = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   const response = await fetch(endpoint, {
     method: 'POST',

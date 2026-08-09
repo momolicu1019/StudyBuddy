@@ -2,11 +2,7 @@
  * App data access layer.
  *
  * Study Buddy is local-first: screens talk to `localBackend` on-device storage.
- * Optional Google account backup/sync lives in `storage/cloud.ts`.
+ * PDF backup/restore lives in `storage/pdfBackup.ts` (via cloud helpers).
  */
 export { localBackend as api } from '../storage/localBackend';
-export {
-  backupLocalData,
-  isGoogleOAuthConfigured,
-  restoreLocalData,
-} from '../storage/cloud';
+export { backupLocalData, restoreLocalData } from '../storage/cloud';

@@ -40,7 +40,7 @@ export function getAiConfig() {
   const model = (
     process.env.EXPO_PUBLIC_AI_MODEL ||
     extra.aiModel ||
-    'gemini-2.0-flash'
+    'gemini-flash-latest'
   ).trim();
 
   return { apiKey, baseUrl, model };

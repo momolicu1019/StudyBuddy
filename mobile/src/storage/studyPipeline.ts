@@ -2,7 +2,12 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { DraftFlashcard } from '../api/types';
 import { isAiConfigured } from './aiConfig';
-import { formatExplanationAsBullets, sanitizeFlashcardText } from './explanationFormat';
+import {
+  formatExplanationAsBullets,
+  isWeakKeyPointTitle,
+  normalizeKeyPointTitle,
+  sanitizeFlashcardText,
+} from './explanationFormat';
 import { generateWithGemini } from './geminiClient';
 import {
   labelForSource,
@@ -55,13 +60,12 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
 }
 
 function toReviewCard(title: string, summary: string): DraftFlashcard | null {
-  const front = sanitizeFlashcardText(title).replace(/\?+$/g, '').trim();
   const back = formatExplanationAsBullets(summary);
-  // Exam reviewers need a real explanation, not a tiny phrase.
-  if (front.length < 2 || back.length < 40) return null;
-  if (/^(what|why|how|when|where|who|which)\b/i.test(front)) {
-    return { question: front.replace(/\?+$/g, '').trim(), answer: back };
-  }
+  if (back.length < 40) return null;
+
+  const front = normalizeKeyPointTitle(title, back);
+  if (front.length < 2 || isWeakKeyPointTitle(front)) return null;
+
   return { question: front, answer: back };
 }
 
@@ -82,7 +86,6 @@ function buildExplanation(row: Record<string, unknown>): string {
     .map((v) => String(v ?? '').trim())
     .filter(Boolean);
 
-  // Prefer a single rich explanation field; otherwise join unique parts.
   const unique: string[] = [];
   for (const part of parts) {
     if (!unique.some((u) => u.toLowerCase() === part.toLowerCase())) {
@@ -111,7 +114,6 @@ export function translateAnalysisToFlashcards(
     if (cards.length >= MAX_CARDS) break;
   }
 
-  // If Gemini only returned an overview, split it into a few review cards.
   if (!cards.length && analysis.overview.trim().length >= 40) {
     const chunks = analysis.overview
       .split(/(?<=[.!?])\s+/)
@@ -129,7 +131,6 @@ export function translateAnalysisToFlashcards(
 function parseAnalysis(raw: string): StudyAnalysis {
   const obj = parseJsonObject(raw);
   if (!obj) {
-    // Plain-text fallback: treat whole response as overview.
     return { overview: raw.trim(), keyPoints: [] };
   }
 
@@ -165,10 +166,95 @@ function parseAnalysis(raw: string): StudyAnalysis {
   return { overview, keyPoints };
 }
 
+function buildAnalyzePrompt(args: {
+  sourceLabel: string;
+  filename?: string;
+  fromExtractedText?: boolean;
+}): string {
+  return [
+    'You are Study Buddy, an academic research tutor who writes informative study summaries.',
+    args.fromExtractedText
+      ? 'Turn the extracted study-note text below into exam-review flashcards.'
+      : `Read this ${args.sourceLabel} and extract the knowledge into exam-review flashcards.`,
+    args.filename ? `Filename: ${args.filename}` : '',
+    '',
+    'Return ONLY valid JSON with this shape:',
+    '{',
+    '  "overview": "2-4 sentence scholarly overview of the subject matter (not the document layout)",',
+    '  "key_points": [',
+    '    {',
+    '      "title": "short complete concept name (2-6 words)",',
+    '      "explanation": "bullet list string (see rules)"',
+    '    }',
+    '  ]',
+    '}',
+    '',
+    'Title rules (critical):',
+    '- title must be the MOST IMPORTANT concept name for that card (a noun phrase / term / process name).',
+    '- Good examples: "Water Cycle", "Photosynthesis", "Newton’s Second Law", "Mitochondria".',
+    '- Bad examples: "The rain in", "Photosynthesis is the", "According to the notes", sentence fragments, or truncated phrases.',
+    '- Never end a title with a preposition/article (in, of, the, a, and, to, for, with…).',
+    '- Prefer 2 to 6 words. Do not write a full sentence as the title.',
+    '',
+    'Writing style for each explanation (critical):',
+    '- ALWAYS write the explanation as a BULLET LIST — never one long paragraph.',
+    '- Put each point on its own line starting with "• " (Unicode bullet + space).',
+    '- Use 4 to 7 short bullets covering: what it is, how it works, key details, formulas/examples, and why it matters.',
+    '- Keep each bullet to one clear idea (about 1 short sentence).',
+    '- Do not start bullets with markdown like **, *, __, or #.',
+    '- Include formulas, mechanisms, comparisons, cause/effect, and examples from the material when present.',
+    '',
+    'Hard bans — never do these:',
+    '- Do NOT write a single paragraph wall of text.',
+    '- Do NOT describe the page/photo layout (no “at the top of the page”, “on the left”, “the heading says”, “this slide shows”, “the image contains”).',
+    '- Do NOT narrate OCR/visual structure, boxes, columns, or where text appears.',
+    '- Do NOT invent facts that are not supported by the material.',
+    '',
+    'Other rules:',
+    '- Create 8 to 16 key_points covering the most testable ideas from the full content.',
+    '- Titles must be concept names, not quiz questions (no What/Why/How/Define...).',
+    '- Prefer definitions, processes, formulas, comparisons, theorems, and must-know facts.',
+    '- Plain text only — never use markdown (no **, __, `, or # headings).',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Photo flow: OCR all readable text first, then build flashcards from that text.
+ */
+async function extractTextFromPhoto(input: {
+  base64: string;
+  mimeType: string;
+  filename?: string;
+}): Promise<string> {
+  const prompt = [
+    'You are an OCR engine for student study notes.',
+    'Extract ALL readable text from this photo.',
+    'Include headings, body text, captions, labels, formulas, table cells, and handwritten notes when readable.',
+    'Preserve reading order with newlines.',
+    'Return plain text only — no commentary, no markdown, no “here is the text”.',
+    'If some words are unclear, give your best reading; do not skip whole sections.',
+    input.filename ? `Filename hint: ${input.filename}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const raw = await generateWithGemini(
+    [
+      { text: prompt },
+      { inlineData: { mimeType: input.mimeType, data: input.base64 } },
+    ],
+    { temperature: 0.1 },
+  );
+
+  return sanitizeFlashcardText(raw);
+}
+
 /**
  * Full Study Buddy generation flow:
  * 1) Upload study file (PDF, Word, PowerPoint, Excel, text, or photo)
- * 2) Submit file to Gemini for analysis
+ * 2) Submit file to Gemini for analysis (photos: OCR text first)
  * 3) Translate Gemini summary/key points into flashcards
  */
 export async function generateFlashcardsViaGeminiPipeline(input: {
@@ -197,59 +283,59 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
   const mimeType = mimeForSource(input.sourceType, input.filename, input.uri);
   const sourceLabel = labelForSource(input.sourceType);
 
-  const analyzePrompt = [
-    'You are Study Buddy, an academic research tutor who writes informative study summaries.',
-    `Read this ${sourceLabel} and extract the knowledge into exam-review flashcards.`,
-    input.filename ? `Filename: ${input.filename}` : '',
-    '',
-    'Return ONLY valid JSON with this shape:',
-    '{',
-    '  "overview": "2-4 sentence scholarly overview of the subject matter (not the document layout)",',
-    '  "key_points": [',
-    '    {',
-    '      "title": "short concept name (NOT a quiz question)",',
-    '      "explanation": "bullet list string (see rules)"',
-    '    }',
-    '  ]',
-    '}',
-    '',
-    'Writing style for each explanation (critical):',
-    '- ALWAYS write the explanation as a BULLET LIST — never one long paragraph.',
-    '- Put each point on its own line starting with "• " (Unicode bullet + space).',
-    '- Use 4 to 7 short bullets covering: what it is, how it works, key details, formulas/examples, and why it matters.',
-    '- Keep each bullet to one clear idea (about 1 short sentence).',
-    '- Include formulas, mechanisms, comparisons, cause/effect, and examples from the material when present.',
-    '',
-    'Hard bans — never do these:',
-    '- Do NOT write a single paragraph wall of text.',
-    '- Do NOT describe the page/photo layout (no “at the top of the page”, “on the left”, “the heading says”, “this slide shows”, “the image contains”).',
-    '- Do NOT narrate OCR/visual structure, boxes, columns, or where text appears.',
-    '- Do NOT translate captions/labels literally as UI description; convert them into conceptual knowledge.',
-    '- Do NOT invent facts that are not supported by the material.',
-    '',
-    'Other rules:',
-    '- Create 8 to 16 key_points covering the most testable ideas.',
-    '- Titles must be concept names, not quiz questions (no What/Why/How/Define...).',
-    '- Prefer definitions, processes, formulas, comparisons, theorems, and must-know facts.',
-    '- Plain text only — never use markdown (no **, __, `, or # headings).',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  let analysisRaw = '';
 
-  // Step 2: submit upload to Gemini for analysis
-  const analysisRaw = await generateWithGemini(
-    [
-      { text: analyzePrompt },
-      { inlineData: { mimeType, data: base64 } },
-    ],
-    { temperature: 0.25, json: true },
-  );
+  if (input.sourceType === 'photo') {
+    const extracted = await extractTextFromPhoto({
+      base64,
+      mimeType,
+      filename: input.filename,
+    });
+
+    if (extracted.replace(/\s+/g, ' ').trim().length < 40) {
+      throw new Error(
+        'Could not read enough text from the photo. Try a clearer, well-lit photo with readable writing.',
+      );
+    }
+
+    const analyzePrompt = buildAnalyzePrompt({
+      sourceLabel,
+      filename: input.filename,
+      fromExtractedText: true,
+    });
+
+    analysisRaw = await generateWithGemini(
+      [
+        {
+          text: [
+            analyzePrompt,
+            '',
+            'Extracted text from the photo (use ALL of this content):',
+            extracted.slice(0, 14000),
+          ].join('\n'),
+        },
+      ],
+      { temperature: 0.25, json: true },
+    );
+  } else {
+    const analyzePrompt = buildAnalyzePrompt({
+      sourceLabel,
+      filename: input.filename,
+    });
+
+    analysisRaw = await generateWithGemini(
+      [
+        { text: analyzePrompt },
+        { inlineData: { mimeType, data: base64 } },
+      ],
+      { temperature: 0.25, json: true },
+    );
+  }
 
   if (!analysisRaw.trim()) {
     throw new Error('Gemini returned an empty analysis. Try another file.');
   }
 
-  // Step 3: translate Gemini info into flashcards
   const analysis = parseAnalysis(analysisRaw);
   const cards = translateAnalysisToFlashcards(analysis);
 
@@ -265,4 +351,3 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
     usedAi: true,
   };
 }
-

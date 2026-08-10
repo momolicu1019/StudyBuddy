@@ -15,7 +15,7 @@ import type { Flashcard } from '../api/types';
 import { Card, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
-import { explanationToBullets, sanitizeFlashcardText } from '../storage/explanationFormat';
+import { explanationToBullets, normalizeKeyPointTitle } from '../storage/explanationFormat';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Study'>;
@@ -178,7 +178,7 @@ export function StudyScreen({ route, navigation }: Props) {
 
   const card = cards[index];
   const explanationBullets = explanationToBullets(card.answer || '');
-  const keyConcept = sanitizeFlashcardText(card.question || '');
+  const keyConcept = normalizeKeyPointTitle(card.question || '', card.answer);
   const atStart = index <= 0;
   const atEnd = index >= cards.length - 1;
   const masteredCount = cards.filter((c) => c.mastered).length;

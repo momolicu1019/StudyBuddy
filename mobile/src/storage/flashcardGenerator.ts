@@ -2,7 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { DraftFlashcard } from '../api/types';
 import { isAiConfigured } from './aiConfig';
-import { formatExplanationAsBullets, sanitizeFlashcardText } from './explanationFormat';
+import { formatExplanationAsBullets, isWeakKeyPointTitle, normalizeKeyPointTitle } from './explanationFormat';
 import { generateAiText, generateWithGemini } from './geminiClient';
 import {
   labelForSource,
@@ -34,9 +34,10 @@ function looksLikeQuestion(text: string): boolean {
 }
 
 function toReviewCard(title: string, summary: string): DraftFlashcard | null {
-  const front = sanitizeFlashcardText(title).replace(/\?+$/g, '').trim();
   const back = formatExplanationAsBullets(summary);
-  if (front.length < 2 || back.length < 40) return null;
+  if (back.length < 40) return null;
+  const front = normalizeKeyPointTitle(title, back);
+  if (front.length < 2 || isWeakKeyPointTitle(front)) return null;
   return { question: front, answer: back };
 }
 
@@ -144,8 +145,12 @@ const FLASHCARD_INSTRUCTIONS = [
   'Create exam-review flashcards from the study material.',
   'Do NOT write quiz questions. Do NOT start titles with What/Why/How/Define.',
   'Each card: short concept title + a BULLETED explanation (never one long paragraph).',
+  'Title must be the MOST IMPORTANT concept name (2–6 words), e.g. "Water Cycle" or "Photosynthesis".',
+  'Never use truncated sentence starters as titles (bad: "The rain in", "Photosynthesis is the").',
+  'Never end a title with a preposition/article (in, of, the, a, and, to, for, with…).',
   'Write explanation as 4 to 7 short lines, each starting with "• ", covering: what it is, how it works, key details, formulas/examples, and why it matters.',
   'Keep each bullet to one clear idea (about one short sentence).',
+  'Do not start bullets with markdown like **, *, __, or #.',
   'Include formulas, processes, comparisons, and examples when present in the source.',
   'Never describe page/photo layout (no “at the top”, “on the left”, “this slide shows”, “the heading says”, “the image contains”).',
   'Never narrate OCR/visual structure; convert the content into conceptual knowledge only.',
@@ -293,8 +298,11 @@ export function buildReviewFlashcardsLocally(
       if (card) cards.push(card);
       continue;
     }
-    const words = bullet.split(/\s+/);
-    const title = words.slice(0, Math.min(8, words.length)).join(' ');
+    // Prefer a definition-style title over chopping the first N words of a sentence.
+    const defMatch = bullet.match(
+      /^(.{2,55}?)\s+(?:is|are|means|refers to)\b/i,
+    );
+    const title = defMatch?.[1]?.trim() || `Key idea`;
     const card = toReviewCard(title, bullet);
     if (card) cards.push(card);
   }
@@ -431,6 +439,7 @@ export async function buildFlashcardsFromTutorReply(input: {
         'Convert the tutor answer into exam-review flashcards.',
         'Do NOT write quiz questions. Titles must be concept names.',
         'Each card needs title + a BULLETED explanation (4–7 lines starting with "• "; never one paragraph).',
+        'Title must be the most important concept name (2–6 words), never a truncated sentence starter.',
         'Use ONLY the academic content. Ignore any meta about missing flashcards, AI errors, tips, or app features.',
         'Do not mention chat, tutors, or that this came from an AI reply.',
         'Plain text only — never use markdown (no **, __, `, or # headings).',

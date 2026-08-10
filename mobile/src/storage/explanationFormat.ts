@@ -31,6 +31,133 @@ export function sanitizeFlashcardText(text: string): string {
     .trim();
 }
 
+/** Strip leftover markup that often appears at the start of a bullet/line. */
+export function stripLeadingFlashcardJunk(text: string): string {
+  let line = text.trim();
+  for (let i = 0; i < 4; i += 1) {
+    const next = line
+      .replace(/^[\s*_#`~•●▪◦\-–—>★☆▪︎·]+/, '')
+      .replace(/^\*{1,3}/, '')
+      .replace(/^_{1,3}/, '')
+      .replace(/^:+\s*/, '')
+      .replace(/^["'“”‘’]+/, '')
+      .trim();
+    if (next === line) break;
+    line = next;
+  }
+  return sanitizeFlashcardText(line);
+}
+
+const WEAK_TITLE_ENDINGS =
+  /\b(the|a|an|and|or|of|in|on|to|for|with|from|by|as|at|into|onto|about|over|under|than|then|that|this|these|those|is|are|was|were|be|been|being)\s*$/i;
+
+/**
+ * True when a key-point title looks like a truncated sentence, not a concept name.
+ * Example: "The rain in" / "Photosynthesis is the process of..."
+ */
+export function isWeakKeyPointTitle(title: string): boolean {
+  const t = sanitizeFlashcardText(title).replace(/\?+$/g, '').trim();
+  if (t.length < 3) return true;
+  if (t.length > 64) return true;
+  if (/[.…]{2,}|…$|\.\.\.$/.test(t)) return true;
+  if (/,$/.test(t)) return true;
+  if (WEAK_TITLE_ENDINGS.test(t)) return true;
+  if (/^(key (point|concept)|concept|notes from|untitled)\b/i.test(t)) return true;
+  if (/^(what|why|how|when|where|who|which|explain|describe|define)\b/i.test(t)) {
+    return true;
+  }
+
+  const words = t.split(/\s+/).filter(Boolean);
+  // Long article-led phrases are usually sentence starters, not concept labels.
+  if (
+    words.length >= 6 &&
+    /^(the|a|an|this|that|these|those|it|they|there)\b/i.test(t)
+  ) {
+    return true;
+  }
+  // Mid-sentence feel: many lowercase function words and no noun-like shape.
+  if (words.length >= 8) return true;
+
+  return false;
+}
+
+function deriveTitleFromExplanation(explanation: string): string | null {
+  const bullets = explanationToBullets(explanation);
+  const first = bullets[0] ?? sanitizeFlashcardText(explanation).split(/[.!?]/)[0] ?? '';
+  if (!first) return null;
+
+  const labeled = first.match(
+    /^(definition|mechanism|significance|formula|example|process|cause|effect)\s*[:\-–—]\s*(.+)$/i,
+  );
+  if (labeled?.[2]) {
+    const candidate = sanitizeFlashcardText(labeled[2]).slice(0, 60);
+    if (!isWeakKeyPointTitle(candidate)) return candidate;
+  }
+
+  const def = first.match(
+    /^(.{2,55}?)\s+(?:is|are|means|refers to|describes|involves)\b/i,
+  );
+  if (def?.[1]) {
+    const candidate = sanitizeFlashcardText(def[1]).replace(/:$/, '').trim();
+    if (!isWeakKeyPointTitle(candidate)) return candidate;
+  }
+
+  // Prefer a short Proper-Case phrase inside the first bullet.
+  const proper = first.match(
+    /\b([A-Z][A-Za-z0-9]+(?:[\s/-][A-Z][A-Za-z0-9]+){0,4})\b/,
+  );
+  if (proper?.[1]) {
+    const candidate = sanitizeFlashcardText(proper[1]);
+    if (candidate.length >= 3 && candidate.length <= 50 && !isWeakKeyPointTitle(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Last resort: first 2–4 content words (skip leading articles).
+  const words = first
+    .replace(/[^A-Za-z0-9\s/-]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((w) => !/^(the|a|an|this|that)$/i.test(w));
+  if (words.length >= 2) {
+    const candidate = words.slice(0, Math.min(4, words.length)).join(' ');
+    if (!isWeakKeyPointTitle(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+/**
+ * Turn a raw AI title into a short, meaningful key-point label.
+ * Falls back to deriving a concept name from the explanation when needed.
+ */
+export function normalizeKeyPointTitle(
+  rawTitle: string,
+  explanation?: string,
+): string {
+  let title = stripLeadingFlashcardJunk(rawTitle)
+    .replace(/\?+$/g, '')
+    .replace(/[.…]{2,}$/g, '')
+    .replace(/[:\-–—]\s*$/g, '')
+    .trim();
+
+  if (isWeakKeyPointTitle(title) && explanation) {
+    const recovered = deriveTitleFromExplanation(explanation);
+    if (recovered) title = recovered;
+  }
+
+  title = stripLeadingFlashcardJunk(title)
+    .replace(/\?+$/g, '')
+    .trim();
+
+  // Soft length cap for study UI.
+  if (title.length > 64) {
+    title = title.slice(0, 64).replace(/\s+\S*$/, '').trim();
+  }
+
+  return title;
+}
+
 /**
  * Split an explanation into short bullet lines for study UI.
  * Handles AI bullet lists, newlines, and plain paragraphs.
@@ -40,7 +167,7 @@ export function explanationToBullets(text: string): string[] {
   if (!raw) return [];
 
   const stripMarker = (line: string) =>
-    sanitizeFlashcardText(
+    stripLeadingFlashcardJunk(
       line
         .replace(/^[-•*●▪◦–—]\s+/, '')
         .replace(/^\d+[.)]\s+/, '')
@@ -63,17 +190,18 @@ export function explanationToBullets(text: string): string[] {
   // Plain paragraph → one bullet per sentence so existing cards stay readable.
   const sentences = raw
     .split(/(?<=[.!?])\s+(?=[A-Z0-9“"(])/)
-    .map((s) => sanitizeFlashcardText(s))
+    .map((s) => stripLeadingFlashcardJunk(s))
     .filter((s) => s.length > 12);
 
   if (sentences.length >= 2) return sentences;
 
-  return [raw];
+  return [stripLeadingFlashcardJunk(raw)].filter(Boolean);
 }
 
 /** Normalize stored explanation text into a consistent • bullet list. */
 export function formatExplanationAsBullets(text: string): string {
   return explanationToBullets(text)
-    .map((line) => `• ${line}`)
+    .map((line) => `• ${stripLeadingFlashcardJunk(line)}`)
+    .filter((line) => line.length > 2)
     .join('\n');
 }

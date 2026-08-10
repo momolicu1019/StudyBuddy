@@ -100,7 +100,7 @@ export function DashboardScreen() {
     const camera = await ImagePicker.requestCameraPermissionsAsync();
     if (camera.granted) {
       const photo = await ImagePicker.launchCameraAsync({
-        quality: 0.8,
+        quality: 1,
         allowsEditing: false,
       });
       if (photo.canceled || !photo.assets?.[0]) return;
@@ -124,7 +124,7 @@ export function DashboardScreen() {
 
     const library = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      quality: 0.8,
+      quality: 1,
     });
     if (library.canceled || !library.assets?.[0]) return;
     const asset = library.assets[0];

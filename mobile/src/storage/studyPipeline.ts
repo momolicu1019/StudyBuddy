@@ -2,7 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { DraftFlashcard } from '../api/types';
 import { isAiConfigured } from './aiConfig';
-import { formatExplanationAsBullets } from './explanationFormat';
+import { formatExplanationAsBullets, sanitizeFlashcardText } from './explanationFormat';
 import { generateWithGemini } from './geminiClient';
 import {
   labelForSource,
@@ -55,8 +55,8 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
 }
 
 function toReviewCard(title: string, summary: string): DraftFlashcard | null {
-  const front = title.trim().replace(/\?+$/g, '').trim();
-  const back = formatExplanationAsBullets(summary.trim());
+  const front = sanitizeFlashcardText(title).replace(/\?+$/g, '').trim();
+  const back = formatExplanationAsBullets(summary);
   // Exam reviewers need a real explanation, not a tiny phrase.
   if (front.length < 2 || back.length < 40) return null;
   if (/^(what|why|how|when|where|who|which)\b/i.test(front)) {
@@ -231,6 +231,7 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
     '- Create 8 to 16 key_points covering the most testable ideas.',
     '- Titles must be concept names, not quiz questions (no What/Why/How/Define...).',
     '- Prefer definitions, processes, formulas, comparisons, theorems, and must-know facts.',
+    '- Plain text only — never use markdown (no **, __, `, or # headings).',
   ]
     .filter(Boolean)
     .join('\n');

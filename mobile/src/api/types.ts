@@ -78,4 +78,6 @@ export type QuizResult = {
 
 export type TutorReply = {
   reply: string;
+  /** When false, hide “Make flashcards” for this assistant message. */
+  allow_flashcards?: boolean;
 };

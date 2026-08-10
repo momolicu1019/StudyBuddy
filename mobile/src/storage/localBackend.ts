@@ -20,6 +20,7 @@ import type {
   Subject,
   TutorReply,
 } from '../api/types';
+import { formatExplanationAsBullets, sanitizeFlashcardText } from './explanationFormat';
 import { persistSourceFile } from './pdfs';
 import type { SourceKind } from './sourceMime';
 import { labelForSource } from './sourceMime';
@@ -158,8 +159,8 @@ export const localBackend = {
       for (const draft of cards) {
         db.flashcards[key].push({
           id: db.next_card_id,
-          question: draft.question,
-          answer: draft.answer,
+          question: sanitizeFlashcardText(draft.question),
+          answer: formatExplanationAsBullets(draft.answer),
           mastered: false,
         });
         db.next_card_id += 1;

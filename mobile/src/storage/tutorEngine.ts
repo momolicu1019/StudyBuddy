@@ -158,7 +158,7 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
               `${i + 1}. [${n.subject}] Key point: ${n.question}\n   Summary: ${n.answer}`,
           )
           .join('\n')
-      : 'No matching flashcards were found on device.';
+      : '(No on-device flashcard notes for this question — answer from solid general knowledge.)';
 
   const history = (ctx.history ?? [])
     .filter((m) => m.text.trim())
@@ -168,10 +168,12 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
 
   const system = [
     'You are Study Buddy AI Tutor, a friendly and accurate study coach.',
-    'Answer the student question directly and clearly.',
-    'Use short paragraphs or numbered steps when helpful.',
+    'Answer the student question directly and clearly with useful academic content.',
+    'Use short paragraphs, numbered steps, or bullets when helpful.',
     'Prefer facts from the student notes when they are relevant.',
-    'If notes are incomplete, still answer the question using solid general knowledge, and say what is from notes vs general knowledge.',
+    'If notes are missing or incomplete, still teach the topic using solid general knowledge — do not apologize about missing flashcards.',
+    'Never say phrases like “since you don’t have flashcards”, “I couldn’t find matching flashcards”, or “generate flashcards first”.',
+    'Never end with tips about uploading notes, creating flashcards, or app features — stay on the subject matter.',
     'Keep replies concise (about 80–180 words) unless the student asks for more detail.',
     `Current subject focus: ${topic}.`,
   ].join(' ');
@@ -202,19 +204,14 @@ function answerFromNotes(ctx: TutorContext): string {
   if (matched.length > 0) {
     const best = matched[0];
     const extras = matched.slice(1, 3);
-    let reply =
-      `Here's a direct answer based on your ${topic} notes:\n\n` +
-      `${best.answer}\n\n` +
-      `That comes from your card: “${best.question}”.`;
+    let reply = best.answer.trim();
 
     if (extras.length) {
       reply +=
-        `\n\nRelated points from your flashcards:\n` +
+        `\n\nRelated points:\n` +
         extras.map((n) => `• ${n.answer}`).join('\n');
     }
 
-    reply +=
-      '\n\nIf you want, ask a follow-up like “give an example” or “quiz me on this”.';
     return reply;
   }
 
@@ -242,13 +239,34 @@ function answerFromNotes(ctx: TutorContext): string {
 
   // No notes + no API: be honest, but still engage the actual question.
   return (
-    `I couldn't find matching flashcards for that yet.\n\n` +
+    `I couldn't find matching notes for that yet.\n\n` +
     `You asked: “${question}”\n\n` +
     (isAiConfigured()
       ? 'Live AI could not answer this one. Try again in a moment.'
-      : 'AI isn’t available right now. You can still ask about topics from your flashcards.') +
-    '\n\nTip: generate flashcards from your notes first, then ask about those topics.'
+      : 'AI isn’t available right now. Try asking about a topic from your notes.')
   );
+}
+
+/**
+ * True when the reply is real study content worth turning into flashcards.
+ * False for API errors, empty coaching, and “try again” messages.
+ */
+export function isFlashcardWorthyTutorReply(reply: string): boolean {
+  const text = reply.trim();
+  if (text.length < 60) return false;
+
+  const blocklist = [
+    /couldn'?t get a live ai answer/i,
+    /i could not answer that just now/i,
+    /please try asking again/i,
+    /try asking again in a moment/i,
+    /ai isn'?t available right now/i,
+    /live ai could not answer/i,
+    /couldn'?t find matching (flashcards|notes)/i,
+    /generate flashcards from your notes first/i,
+    /ask me anything about your notes/i,
+  ];
+  return !blocklist.some((pattern) => pattern.test(text));
 }
 
 /**
@@ -262,22 +280,37 @@ export async function answerTutorQuestion(
   if (!text) {
     return {
       reply: "Ask me anything about your notes — I'll explain it step by step.",
+      allow_flashcards: false,
     };
   }
 
   try {
     const cloud = await askCloudTutor({ ...ctx, message: text });
-    if (cloud) return { reply: cloud };
+    if (cloud) {
+      return {
+        reply: cloud,
+        allow_flashcards: isFlashcardWorthyTutorReply(cloud),
+      };
+    }
   } catch (error) {
     if (isAiConfigured()) {
       return {
         reply:
           `I couldn't get a live AI answer just now.\n\n${friendlyAiError(error)}\n\n` +
           'You can try asking again, or study from your flashcards in the meantime.',
+        allow_flashcards: false,
       };
     }
-    return { reply: answerFromNotes({ ...ctx, message: text }) };
+    const reply = answerFromNotes({ ...ctx, message: text });
+    return {
+      reply,
+      allow_flashcards: isFlashcardWorthyTutorReply(reply),
+    };
   }
 
-  return { reply: answerFromNotes({ ...ctx, message: text }) };
+  const reply = answerFromNotes({ ...ctx, message: text });
+  return {
+    reply,
+    allow_flashcards: isFlashcardWorthyTutorReply(reply),
+  };
 }

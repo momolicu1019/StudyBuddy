@@ -2,7 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { DraftFlashcard } from '../api/types';
 import { isAiConfigured } from './aiConfig';
-import { formatExplanationAsBullets } from './explanationFormat';
+import { formatExplanationAsBullets, sanitizeFlashcardText } from './explanationFormat';
 import { generateAiText, generateWithGemini } from './geminiClient';
 import {
   labelForSource,
@@ -34,8 +34,8 @@ function looksLikeQuestion(text: string): boolean {
 }
 
 function toReviewCard(title: string, summary: string): DraftFlashcard | null {
-  const front = title.trim().replace(/\?+$/g, '').trim();
-  const back = formatExplanationAsBullets(summary.trim());
+  const front = sanitizeFlashcardText(title).replace(/\?+$/g, '').trim();
+  const back = formatExplanationAsBullets(summary);
   if (front.length < 2 || back.length < 40) return null;
   return { question: front, answer: back };
 }
@@ -77,6 +77,14 @@ function uniqueCards(cards: DraftFlashcard[]): DraftFlashcard[] {
     out.push(card);
   }
   return out;
+}
+
+const META_CARD_NOISE =
+  /since you (don'?t|do not) have|couldn'?t find matching|generate flashcards|make flashcards|ai isn'?t available|try asking again|from your flashcards first|tip:\s*generate/i;
+
+function isStudyContentCard(card: DraftFlashcard): boolean {
+  const blob = `${card.question}\n${card.answer}`;
+  return !META_CARD_NOISE.test(blob);
 }
 
 export function parseGeminiCards(raw: string): DraftFlashcard[] {
@@ -142,6 +150,7 @@ const FLASHCARD_INSTRUCTIONS = [
   'Never describe page/photo layout (no “at the top”, “on the left”, “this slide shows”, “the heading says”, “the image contains”).',
   'Never narrate OCR/visual structure; convert the content into conceptual knowledge only.',
   'Do not invent facts not supported by the material.',
+  'Never use markdown formatting (no **, __, `, # headings, or code fences). Plain text only.',
   'Return ONLY valid JSON as an array of objects with keys "title" and "explanation".',
   'Create 8 to 16 cards depending on how rich the material is.',
 ].join(' ');
@@ -339,6 +348,57 @@ export async function buildFlashcardsFromText(
 }
 
 /**
+ * Remove tutor meta / coaching wrappers so flashcards only use study content.
+ */
+export function stripTutorReplyForFlashcards(reply: string): string {
+  let text = cleanText(reply);
+
+  // Drop common openers about missing cards / app status.
+  text = text.replace(
+    /^(since you (don'?t|do not) have[^.!?\n]*[.!?]\s*)+/i,
+    '',
+  );
+  text = text.replace(
+    /^(i couldn'?t find matching (flashcards|notes)[^.!?\n]*[.!?]\s*)+/i,
+    '',
+  );
+  text = text.replace(
+    /^(here'?s a direct answer based on your[^.!?\n]*[.!:]\s*)+/i,
+    '',
+  );
+
+  // Drop “You asked: …” meta when it appears as a short lead-in.
+  text = text.replace(/^you asked:\s*[“"][^”"]+[”"]\s*/i, '');
+
+  // Drop footers / tips about the app.
+  text = text.replace(/\n+tip:\s*[\s\S]*$/i, '');
+  text = text.replace(
+    /\n+if you want,? ask a follow-up[\s\S]*$/i,
+    '',
+  );
+  text = text.replace(
+    /\n+that comes from your card:\s*[“"][^”"]+[”"]\s*$/i,
+    '',
+  );
+  text = text.replace(
+    /\n+(generate flashcards from your notes first[\s\S]*)$/i,
+    '',
+  );
+  text = text.replace(
+    /\n+(you can try asking again[\s\S]*)$/i,
+    '',
+  );
+
+  // Drop note/source vs general-knowledge asides that aren't exam content.
+  text = text.replace(
+    /\n*\(?\s*(from (your )?notes|general knowledge|no matching flashcards)[^.!?\n]*[.!?]?\s*\)?/gi,
+    '',
+  );
+
+  return cleanText(text);
+}
+
+/**
  * Turn an AI Tutor reply into exam-review flashcards.
  */
 export async function buildFlashcardsFromTutorReply(input: {
@@ -346,7 +406,7 @@ export async function buildFlashcardsFromTutorReply(input: {
   question?: string;
   subject?: string;
 }): Promise<{ cards: DraftFlashcard[]; usedAi: boolean; aiError?: string }> {
-  const reply = cleanText(input.reply);
+  const reply = stripTutorReplyForFlashcards(input.reply);
   if (reply.length < 40) {
     return {
       cards: [],
@@ -371,7 +431,9 @@ export async function buildFlashcardsFromTutorReply(input: {
         'Convert the tutor answer into exam-review flashcards.',
         'Do NOT write quiz questions. Titles must be concept names.',
         'Each card needs title + a BULLETED explanation (4–7 lines starting with "• "; never one paragraph).',
+        'Use ONLY the academic content. Ignore any meta about missing flashcards, AI errors, tips, or app features.',
         'Do not mention chat, tutors, or that this came from an AI reply.',
+        'Plain text only — never use markdown (no **, __, `, or # headings).',
         'Return ONLY valid JSON array with keys "title" and "explanation".',
         'Create 4 to 12 cards from the most important ideas in the answer.',
       ].join(' '),
@@ -387,7 +449,7 @@ export async function buildFlashcardsFromTutorReply(input: {
       temperature: 0.3,
     });
 
-    const cards = parseGeminiCards(content);
+    const cards = parseGeminiCards(content).filter(isStudyContentCard);
     if (cards.length) {
       return { cards: cards.slice(0, MAX_CARDS), usedAi: true };
     }
@@ -395,7 +457,7 @@ export async function buildFlashcardsFromTutorReply(input: {
     return {
       cards: buildReviewFlashcardsLocally(reply, {
         filename: input.subject || 'AI Tutor',
-      }),
+      }).filter(isStudyContentCard),
       usedAi: false,
       aiError: error instanceof Error ? error.message : 'AI request failed',
     };
@@ -404,7 +466,7 @@ export async function buildFlashcardsFromTutorReply(input: {
   return {
     cards: buildReviewFlashcardsLocally(reply, {
       filename: input.subject || 'AI Tutor',
-    }),
+    }).filter(isStudyContentCard),
     usedAi: false,
   };
 }

@@ -22,7 +22,10 @@ import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
 import { buildFlashcardsFromTutorReply } from '../storage/flashcardGenerator';
 import { friendlyAiError } from '../storage/geminiClient';
-import { isCloudTutorConfigured } from '../storage/tutorEngine';
+import {
+  isCloudTutorConfigured,
+  isFlashcardWorthyTutorReply,
+} from '../storage/tutorEngine';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AITutor'>;
@@ -137,9 +140,15 @@ export function AITutorScreen({ route }: Props) {
     setBusy(true);
     try {
       const res = await api.askTutor(text, subject, history);
+      const allowFlashcards =
+        res.allow_flashcards ?? isFlashcardWorthyTutorReply(res.reply);
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', text: res.reply, allowFlashcards: true },
+        {
+          role: 'assistant',
+          text: res.reply,
+          allowFlashcards,
+        },
       ]);
       requestAnimationFrame(() => {
         scrollRef.current?.scrollToEnd({ animated: true });
@@ -150,6 +159,7 @@ export function AITutorScreen({ route }: Props) {
         {
           role: 'assistant',
           text: 'I could not answer that just now. Please try asking again in a moment.',
+          allowFlashcards: false,
         },
       ]);
     } finally {

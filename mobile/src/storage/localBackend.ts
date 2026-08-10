@@ -130,6 +130,11 @@ export const localBackend = {
       ? ` Overview: ${result.overview.slice(0, 160)}${result.overview.length > 160 ? '…' : ''}`
       : '';
 
+    const photoFlowBit =
+      sourceType === 'photo'
+        ? ' Exact text was copied from the photo, important points were summarized, then flashcards were built.'
+        : '';
+
     return {
       count: result.cards.length,
       cards: result.cards,
@@ -137,11 +142,12 @@ export const localBackend = {
       sample_answer: sample.answer,
       message:
         `${result.cards.length} review flashcards were created from Gemini’s analysis of "${filename}" (${labelForSource(sourceType)}).` +
+        photoFlowBit +
         overviewBit +
         ' Choose a subject to save them.',
       filename,
       source_type: sourceType,
-      extraction_method: 'gemini',
+      extraction_method: sourceType === 'photo' ? 'ocr' : 'gemini',
       overview: result.overview,
     };
   },

@@ -96,38 +96,7 @@ export function DashboardScreen() {
     showToast(`${shortLabelForSource(kind)} ready — tap Generate Flashcards`);
   }
 
-  async function pickPhoto() {
-    const camera = await ImagePicker.requestCameraPermissionsAsync();
-    if (camera.granted) {
-      const photo = await ImagePicker.launchCameraAsync({
-        quality: 1,
-        allowsEditing: false,
-      });
-      if (photo.canceled || !photo.assets?.[0]) return;
-      const asset = photo.assets[0];
-      setSelectedSource({
-        name: asset.fileName ?? 'note-photo.jpg',
-        type: 'photo',
-        uri: asset.uri,
-      });
-      setDraft(null);
-      setSavedSubject(null);
-      showToast('Photo ready — tap Generate Flashcards');
-      return;
-    }
-
-    const libraryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!libraryPermission.granted) {
-      showToast('Camera or photo library permission is required');
-      return;
-    }
-
-    const library = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 1,
-    });
-    if (library.canceled || !library.assets?.[0]) return;
-    const asset = library.assets[0];
+  function applyPhotoSelection(asset: ImagePicker.ImagePickerAsset) {
     setSelectedSource({
       name: asset.fileName ?? 'note-photo.jpg',
       type: 'photo',
@@ -138,14 +107,51 @@ export function DashboardScreen() {
     showToast('Photo ready — tap Generate Flashcards');
   }
 
+  async function takePhoto() {
+    const camera = await ImagePicker.requestCameraPermissionsAsync();
+    if (!camera.granted) {
+      showToast('Camera permission is required to take a photo');
+      return;
+    }
+
+    const photo = await ImagePicker.launchCameraAsync({
+      quality: 1,
+      allowsEditing: false,
+    });
+    if (photo.canceled || !photo.assets?.[0]) return;
+    applyPhotoSelection(photo.assets[0]);
+  }
+
+  async function pickFromPhone() {
+    const libraryPermission =
+      await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!libraryPermission.granted) {
+      showToast('Photo library permission is required to choose a photo');
+      return;
+    }
+
+    const library = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+      allowsEditing: false,
+      allowsMultipleSelection: false,
+    });
+    if (library.canceled || !library.assets?.[0]) return;
+    applyPhotoSelection(library.assets[0]);
+  }
+
   async function onGenerate() {
     if (!selectedSource) {
-      showToast('Upload a file or take a photo first');
+      showToast('Upload a file or choose a photo first');
       return;
     }
     if (generating) return;
     setGenerating(true);
-    showToast('Sending to Gemini for analysis…');
+    showToast(
+      selectedSource.type === 'photo'
+        ? 'Reading exact text from photo…'
+        : 'Sending to Gemini for analysis…',
+    );
     try {
       const result = await generateFromSource(
         selectedSource.type,
@@ -234,17 +240,23 @@ export function DashboardScreen() {
           <IconBubble size={58}>📚</IconBubble>
           <Text style={styles.uploadTitle}>Create flashcards from your notes</Text>
           <Text style={styles.subCenter}>
-            Upload PDF, Word, PowerPoint, Excel, text, or take a photo
+            Upload a study file, take a photo, or choose a photo from your phone
           </Text>
+          <PrimaryButton
+            label="📄 Upload file"
+            onPress={() => void pickDocument()}
+            style={{ marginTop: 16, alignSelf: 'stretch' }}
+          />
           <View style={styles.row}>
             <PrimaryButton
-              label="📄 Upload file"
-              onPress={() => void pickDocument()}
+              label="📷 Take Photo"
+              onPress={() => void takePhoto()}
+              variant="secondary"
               style={styles.flexBtn}
             />
             <PrimaryButton
-              label="📷 Take a Photo"
-              onPress={() => void pickPhoto()}
+              label="🖼️ Choose from Phone"
+              onPress={() => void pickFromPhone()}
               variant="secondary"
               style={styles.flexBtn}
             />
@@ -255,9 +267,11 @@ export function DashboardScreen() {
               <Text style={styles.sourceName}>{selectedSource.name}</Text>
               <Text style={styles.sub}>
                 {generating
-                  ? 'Submitting to AI… then converting the summary into flashcards.'
+                  ? selectedSource.type === 'photo'
+                    ? 'Extracting exact text → summarizing key points → building flashcards…'
+                    : 'Submitting to AI… then converting the summary into flashcards.'
                   : selectedSource.type === 'photo'
-                    ? '📷 Photo ready. Tap generate to analyze it.'
+                    ? '📷 Photo ready. Generate will copy the text word for word, summarize the important points, then make flashcards.'
                     : `📄 ${shortLabelForSource(selectedSource.type)} ready. Tap generate to analyze it.`}
               </Text>
               <PrimaryButton
@@ -365,7 +379,10 @@ export function DashboardScreen() {
         ) : null}
         <View style={styles.sample}>
           <Text style={{ fontWeight: '700', color: colors.ink }}>
-            Sample key point · {draft?.count ?? 0} cards from Gemini
+            Sample key point · {draft?.count ?? 0} cards
+            {draft?.extraction_method === 'ocr'
+              ? ' from photo text'
+              : ' from Gemini'}
           </Text>
           {draft?.overview ? (
             <Text style={[styles.sub, { marginTop: 8 }]}>

@@ -174,7 +174,7 @@ function buildAnalyzePrompt(args: {
   return [
     'You are Study Buddy, an academic research tutor who writes informative study summaries.',
     args.fromExtractedText
-      ? 'Turn the extracted study-note text below into exam-review flashcards.'
+      ? 'You are given OCR text copied word-for-word from a student photo. First summarize the important points from that exact text, then turn those points into exam-review flashcard material.'
       : `Read this ${args.sourceLabel} and extract the knowledge into exam-review flashcards.`,
     args.filename ? `Filename: ${args.filename}` : '',
     '',
@@ -209,6 +209,9 @@ function buildAnalyzePrompt(args: {
     '- Do NOT describe the page/photo layout (no “at the top of the page”, “on the left”, “the heading says”, “this slide shows”, “the image contains”).',
     '- Do NOT narrate OCR/visual structure, boxes, columns, or where text appears.',
     '- Do NOT invent facts that are not supported by the material.',
+    args.fromExtractedText
+      ? '- Stay faithful to the exact OCR wording for names, definitions, formulas, numbers, and quoted phrases. Summarize importance, but do not replace source wording with unrelated paraphrases when the original terms matter.'
+      : '',
     '',
     'Other rules:',
     '- Create 8 to 16 key_points covering the most testable ideas from the full content.',
@@ -221,20 +224,22 @@ function buildAnalyzePrompt(args: {
 }
 
 /**
- * Photo flow: OCR all readable text first, then build flashcards from that text.
+ * Step 1 (photo): copy ALL readable words from the image, word for word.
  */
-async function extractTextFromPhoto(input: {
+async function extractExactTextFromPhoto(input: {
   base64: string;
   mimeType: string;
   filename?: string;
 }): Promise<string> {
   const prompt = [
-    'You are an OCR engine for student study notes.',
-    'Extract ALL readable text from this photo.',
-    'Include headings, body text, captions, labels, formulas, table cells, and handwritten notes when readable.',
-    'Preserve reading order with newlines.',
-    'Return plain text only — no commentary, no markdown, no “here is the text”.',
-    'If some words are unclear, give your best reading; do not skip whole sections.',
+    'You are a strict OCR transcription engine for student study notes.',
+    'Copy the text from this photo WORD FOR WORD — exact wording, spelling, punctuation, and order.',
+    'Include headings, body text, captions, labels, formulas, equations, table cells, lists, and handwritten notes when readable.',
+    'Preserve reading order with newlines between lines/sections.',
+    'Do NOT summarize, paraphrase, correct, or explain anything.',
+    'Do NOT add commentary such as “here is the text” or “the photo shows”.',
+    'Return plain text only — no markdown, no JSON, no quotes around the whole result.',
+    'If a word is partially unclear, give your best exact reading of the characters you see; do not skip whole sections.',
     input.filename ? `Filename hint: ${input.filename}` : '',
   ]
     .filter(Boolean)
@@ -245,16 +250,55 @@ async function extractTextFromPhoto(input: {
       { text: prompt },
       { inlineData: { mimeType: input.mimeType, data: input.base64 } },
     ],
-    { temperature: 0.1 },
+    { temperature: 0 },
   );
 
   return sanitizeFlashcardText(raw);
 }
 
 /**
+ * Step 2 (photo): summarize the important points from the exact OCR text.
+ */
+async function summarizeExactPhotoText(input: {
+  extractedText: string;
+  filename?: string;
+}): Promise<StudyAnalysis> {
+  const analyzePrompt = buildAnalyzePrompt({
+    sourceLabel: 'photo of student notes',
+    filename: input.filename,
+    fromExtractedText: true,
+  });
+
+  const analysisRaw = await generateWithGemini(
+    [
+      {
+        text: [
+          analyzePrompt,
+          '',
+          'Exact OCR text from the photo (word for word). Use this as the only source of truth:',
+          '--- BEGIN EXACT TEXT ---',
+          input.extractedText.slice(0, 14000),
+          '--- END EXACT TEXT ---',
+          '',
+          'Now summarize the important points from that exact text and return the JSON.',
+        ].join('\n'),
+      },
+    ],
+    { temperature: 0.2, json: true },
+  );
+
+  if (!analysisRaw.trim()) {
+    throw new Error('Gemini returned an empty summary of the photo text.');
+  }
+
+  return parseAnalysis(analysisRaw);
+}
+
+/**
  * Full Study Buddy generation flow:
  * 1) Upload study file (PDF, Word, PowerPoint, Excel, text, or photo)
- * 2) Submit file to Gemini for analysis (photos: OCR text first)
+ * 2) For photos: OCR exact words → summarize important points → flashcards
+ *    For other files: submit to Gemini for analysis → flashcards
  * 3) Translate Gemini summary/key points into flashcards
  */
 export async function generateFlashcardsViaGeminiPipeline(input: {
@@ -283,10 +327,11 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
   const mimeType = mimeForSource(input.sourceType, input.filename, input.uri);
   const sourceLabel = labelForSource(input.sourceType);
 
-  let analysisRaw = '';
+  let analysis: StudyAnalysis;
 
   if (input.sourceType === 'photo') {
-    const extracted = await extractTextFromPhoto({
+    // 1) Exact words from the photo
+    const extracted = await extractExactTextFromPhoto({
       base64,
       mimeType,
       filename: input.filename,
@@ -298,45 +343,33 @@ export async function generateFlashcardsViaGeminiPipeline(input: {
       );
     }
 
-    const analyzePrompt = buildAnalyzePrompt({
-      sourceLabel,
+    // 2) Summarize important points from that exact text
+    analysis = await summarizeExactPhotoText({
+      extractedText: extracted,
       filename: input.filename,
-      fromExtractedText: true,
     });
-
-    analysisRaw = await generateWithGemini(
-      [
-        {
-          text: [
-            analyzePrompt,
-            '',
-            'Extracted text from the photo (use ALL of this content):',
-            extracted.slice(0, 14000),
-          ].join('\n'),
-        },
-      ],
-      { temperature: 0.25, json: true },
-    );
   } else {
     const analyzePrompt = buildAnalyzePrompt({
       sourceLabel,
       filename: input.filename,
     });
 
-    analysisRaw = await generateWithGemini(
+    const analysisRaw = await generateWithGemini(
       [
         { text: analyzePrompt },
         { inlineData: { mimeType, data: base64 } },
       ],
       { temperature: 0.25, json: true },
     );
+
+    if (!analysisRaw.trim()) {
+      throw new Error('Gemini returned an empty analysis. Try another file.');
+    }
+
+    analysis = parseAnalysis(analysisRaw);
   }
 
-  if (!analysisRaw.trim()) {
-    throw new Error('Gemini returned an empty analysis. Try another file.');
-  }
-
-  const analysis = parseAnalysis(analysisRaw);
+  // 3) Generate flashcards from the summarized key points
   const cards = translateAnalysisToFlashcards(analysis);
 
   if (!cards.length) {

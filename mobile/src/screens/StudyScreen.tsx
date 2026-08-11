@@ -15,7 +15,7 @@ import type { Flashcard } from '../api/types';
 import { Card, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
-import { explanationToBullets, normalizeKeyPointTitle } from '../storage/explanationFormat';
+import { explanationToBullets, isExampleBullet, normalizeKeyPointTitle } from '../storage/explanationFormat';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Study'>;
@@ -207,14 +207,36 @@ export function StudyScreen({ route, navigation }: Props) {
               <Pressable onPress={revealExplanation}>
                 {explanationBullets.length ? (
                   <View style={styles.bulletList}>
-                    {explanationBullets.map((line, i) => (
-                      <View key={`${i}-${line.slice(0, 24)}`} style={styles.bulletRow}>
-                        <Text style={styles.bulletMark}>•</Text>
-                        <Text style={[styles.prompt, styles.promptExplanation]}>
-                          {line}
-                        </Text>
-                      </View>
-                    ))}
+                    {explanationBullets.map((line, i) => {
+                      const example = isExampleBullet(line);
+                      return (
+                        <View
+                          key={`${i}-${line.slice(0, 24)}`}
+                          style={[
+                            styles.bulletRow,
+                            example ? styles.exampleRow : null,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.bulletMark,
+                              example ? styles.exampleMark : null,
+                            ]}
+                          >
+                            {example ? '✦' : '•'}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.prompt,
+                              styles.promptExplanation,
+                              example ? styles.exampleText : null,
+                            ]}
+                          >
+                            {line}
+                          </Text>
+                        </View>
+                      );
+                    })}
                   </View>
                 ) : (
                   <Text style={[styles.prompt, styles.promptExplanation]}>
@@ -331,6 +353,20 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 24,
     width: 14,
+  },
+  exampleRow: {
+    backgroundColor: '#F3EEFF',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    marginTop: 2,
+  },
+  exampleMark: {
+    color: colors.primary,
+  },
+  exampleText: {
+    color: colors.ink,
+    fontWeight: '700',
   },
   tapCue: {
     marginTop: 18,

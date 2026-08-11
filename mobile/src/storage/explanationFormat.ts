@@ -205,3 +205,33 @@ export function formatExplanationAsBullets(text: string): string {
     .filter((line) => line.length > 2)
     .join('\n');
 }
+
+/** True when a bullet already looks like an Example line. */
+export function isExampleBullet(line: string): boolean {
+  return /^example\s*[:\-–—]/i.test(stripLeadingFlashcardJunk(line));
+}
+
+/**
+ * Ensure explanations include a concrete Example bullet when one is available.
+ * If `example` is provided and no Example bullet exists yet, append it.
+ */
+export function withExampleBullet(
+  explanation: string,
+  example?: string | null,
+): string {
+  const bullets = explanationToBullets(explanation);
+  const hasExample = bullets.some(isExampleBullet);
+  const extra = stripLeadingFlashcardJunk(String(example ?? ''));
+
+  if (!hasExample && extra) {
+    const labeled = /^example\s*[:\-–—]/i.test(extra)
+      ? extra
+      : `Example: ${extra}`;
+    bullets.push(labeled);
+  }
+
+  return bullets
+    .map((line) => `• ${stripLeadingFlashcardJunk(line)}`)
+    .filter((line) => line.length > 2)
+    .join('\n');
+}

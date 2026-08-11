@@ -2,7 +2,15 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { DraftFlashcard } from '../api/types';
 import { isAiConfigured } from './aiConfig';
-import { formatExplanationAsBullets, isWeakKeyPointTitle, normalizeKeyPointTitle } from './explanationFormat';
+import {
+  cardCountInstruction,
+  MAX_CARDS,
+  MIN_CARDS,
+  targetCardCount,
+} from './cardCount';
+import { estimatePdfPagesFromBase64 } from './contentExtract';
+import { exampleStyleInstruction, isSituationalMaterial } from './exampleStyle';
+import { isWeakKeyPointTitle, normalizeKeyPointTitle, withExampleBullet } from './explanationFormat';
 import { generateAiText, generateWithGemini } from './geminiClient';
 import {
   labelForSource,
@@ -10,8 +18,6 @@ import {
   type SourceKind,
 } from './sourceMime';
 
-const MAX_CARDS = 16;
-const MIN_CARDS = 4;
 const MAX_SOURCE_CHARS = 14000;
 const MAX_INLINE_CHARS = 12_000_000; // ~9MB base64 budget guard
 
@@ -33,8 +39,12 @@ function looksLikeQuestion(text: string): boolean {
   );
 }
 
-function toReviewCard(title: string, summary: string): DraftFlashcard | null {
-  const back = formatExplanationAsBullets(summary);
+function toReviewCard(
+  title: string,
+  summary: string,
+  example?: string,
+): DraftFlashcard | null {
+  const back = withExampleBullet(summary, example);
   if (back.length < 40) return null;
   const front = normalizeKeyPointTitle(title, back);
   if (front.length < 2 || isWeakKeyPointTitle(front)) return null;
@@ -53,7 +63,6 @@ function buildExplanation(row: Record<string, unknown>): string {
     row.answer,
     row.why_it_matters,
     row.whyItMatters,
-    row.example,
     row.formula,
   ]
     .map((v) => String(v ?? '').trim())
@@ -66,6 +75,10 @@ function buildExplanation(row: Record<string, unknown>): string {
     }
   }
   return unique.join('\n\n').trim();
+}
+
+function pickExample(row: Record<string, unknown>): string {
+  return String(row.example ?? row.example_text ?? row.worked_example ?? '').trim();
 }
 
 function uniqueCards(cards: DraftFlashcard[]): DraftFlashcard[] {
@@ -88,7 +101,11 @@ function isStudyContentCard(card: DraftFlashcard): boolean {
   return !META_CARD_NOISE.test(blob);
 }
 
-export function parseGeminiCards(raw: string): DraftFlashcard[] {
+export function parseGeminiCards(
+  raw: string,
+  maxCards: number = MAX_CARDS,
+): DraftFlashcard[] {
+  const limit = Math.max(1, Math.min(MAX_CARDS, maxCards));
   const trimmed = raw.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const jsonText = (fenced?.[1] ?? trimmed).trim();
@@ -129,36 +146,57 @@ export function parseGeminiCards(raw: string): DraftFlashcard[] {
         '',
     );
     const summary = buildExplanation(row);
-    const card = toReviewCard(title, summary);
+    const card = toReviewCard(title, summary, pickExample(row));
     if (!card) continue;
     if (looksLikeQuestion(card.question)) {
       card.question = card.question.replace(/\?+$/g, '').trim();
     }
     cards.push(card);
-    if (cards.length >= MAX_CARDS) break;
+    if (cards.length >= limit) break;
   }
   return uniqueCards(cards);
 }
 
-const FLASHCARD_INSTRUCTIONS = [
-  'You are Study Buddy, an academic research tutor who writes informative study summaries.',
-  'Create exam-review flashcards from the study material.',
-  'Do NOT write quiz questions. Do NOT start titles with What/Why/How/Define.',
-  'Each card: short concept title + a BULLETED explanation (never one long paragraph).',
-  'Title must be the MOST IMPORTANT concept name (2–6 words), e.g. "Water Cycle" or "Photosynthesis".',
-  'Never use truncated sentence starters as titles (bad: "The rain in", "Photosynthesis is the").',
-  'Never end a title with a preposition/article (in, of, the, a, and, to, for, with…).',
-  'Write explanation as 4 to 7 short lines, each starting with "• ", covering: what it is, how it works, key details, formulas/examples, and why it matters.',
-  'Keep each bullet to one clear idea (about one short sentence).',
-  'Do not start bullets with markdown like **, *, __, or #.',
-  'Include formulas, processes, comparisons, and examples when present in the source.',
-  'Never describe page/photo layout (no “at the top”, “on the left”, “this slide shows”, “the heading says”, “the image contains”).',
-  'Never narrate OCR/visual structure; convert the content into conceptual knowledge only.',
-  'Do not invent facts not supported by the material.',
-  'Never use markdown formatting (no **, __, `, # headings, or code fences). Plain text only.',
-  'Return ONLY valid JSON as an array of objects with keys "title" and "explanation".',
-  'Create 8 to 16 cards depending on how rich the material is.',
-].join(' ');
+function flashcardInstructions(
+  maxHint?: string,
+  styleHints?: { filename?: string; sourceType?: SourceKind; subject?: string; textSample?: string },
+): string {
+  const exampleRules = exampleStyleInstruction({
+    filename: styleHints?.filename,
+    sourceLabel: styleHints?.sourceType
+      ? labelForSource(styleHints.sourceType)
+      : undefined,
+    subject: styleHints?.subject,
+    situational: isSituationalMaterial([
+      styleHints?.filename,
+      styleHints?.subject,
+      styleHints?.textSample,
+      styleHints?.sourceType ? labelForSource(styleHints.sourceType) : undefined,
+    ]),
+  });
+
+  return [
+    'You are Study Buddy, an academic research tutor who writes informative study summaries.',
+    'Create exam-review flashcards from the study material.',
+    'Do NOT write quiz questions. Do NOT start titles with What/Why/How/Define.',
+    'Each card: short concept title + a BULLETED explanation (never one long paragraph).',
+    'Title must be the MOST IMPORTANT concept name (2–6 words), e.g. "Water Cycle", "Photosynthesis", or for law "Duty of Care".',
+    'Never use truncated sentence starters as titles (bad: "The rain in", "Photosynthesis is the").',
+    'Never end a title with a preposition/article (in, of, the, a, and, to, for, with…).',
+    'Write explanation as 4 to 7 short lines, each starting with "• ", covering: what it is, how it works, key details, formulas/elements, and why it matters.',
+    exampleRules,
+    'Keep each bullet to one clear idea (about one short sentence).',
+    'Do not start bullets with markdown like **, *, __, or #.',
+    'Include formulas, processes, comparisons, and domain-matched examples when present in the source.',
+    'Never describe page/photo layout (no “at the top”, “on the left”, “this slide shows”, “the heading says”, “the image contains”).',
+    'Never narrate OCR/visual structure; convert the content into conceptual knowledge only.',
+    'Do not invent facts not supported by the material.',
+    'Never use markdown formatting (no **, __, `, # headings, or code fences). Plain text only.',
+    'Return ONLY valid JSON as an array of objects with keys "title", "explanation", and optional "example".',
+    maxHint ??
+      'Create as many cards as the material needs (typically 6–12 for a short page, up to 60 for long PDFs). Do not collapse rich multi-page notes into only ~12 cards.',
+  ].join(' ');
+}
 
 /**
  * Ask Gemini to read the uploaded file directly (multimodal) and return review cards.
@@ -188,8 +226,19 @@ export async function buildFlashcardsFromFile(input: {
     }
 
     const mimeType = mimeForSource(input.sourceType, input.filename, input.uri);
+    const cardTarget = targetCardCount({
+      sourceType: input.sourceType,
+      byteLength: Math.floor((base64.length * 3) / 4),
+      pageCount:
+        input.sourceType === 'pdf'
+          ? estimatePdfPagesFromBase64(base64)
+          : undefined,
+    });
     const prompt = [
-      FLASHCARD_INSTRUCTIONS,
+      flashcardInstructions(cardCountInstruction(cardTarget), {
+        filename: input.filename,
+        sourceType: input.sourceType,
+      }),
       '',
       `Source type: ${labelForSource(input.sourceType)}.`,
       input.filename ? `Filename: ${input.filename}` : '',
@@ -206,7 +255,7 @@ export async function buildFlashcardsFromFile(input: {
       { temperature: 0.25, json: true },
     );
 
-    const cards = parseGeminiCards(content);
+    const cards = parseGeminiCards(content, cardTarget.max);
     if (!cards.length) {
       return {
         cards: [],
@@ -214,7 +263,7 @@ export async function buildFlashcardsFromFile(input: {
         aiError: 'AI returned no usable flashcards from this file',
       };
     }
-    return { cards: cards.slice(0, MAX_CARDS), usedAi: true };
+    return { cards: cards.slice(0, cardTarget.max), usedAi: true };
   } catch (error) {
     return {
       cards: [],
@@ -234,9 +283,17 @@ async function buildFlashcardsWithAiText(
     ? labelForSource(options.sourceType)
     : 'study notes';
   const fileHint = options?.filename ? ` (file: ${options.filename})` : '';
+  const cardTarget = targetCardCount({
+    sourceType: options?.sourceType,
+    textLength: text.length,
+  });
 
   const content = await generateAiText({
-    system: FLASHCARD_INSTRUCTIONS,
+    system: flashcardInstructions(cardCountInstruction(cardTarget), {
+      filename: options?.filename,
+      sourceType: options?.sourceType,
+      textSample: text.slice(0, 1200),
+    }),
     user: [
       `Analyze these ${sourceLabel}${fileHint} and turn them into key-point review flashcards.`,
       '',
@@ -246,8 +303,8 @@ async function buildFlashcardsWithAiText(
     temperature: 0.3,
   });
 
-  const cards = parseGeminiCards(content);
-  return cards.length ? cards : null;
+  const cards = parseGeminiCards(content, cardTarget.max);
+  return cards.length ? cards.slice(0, cardTarget.max) : null;
 }
 
 /**
@@ -269,6 +326,11 @@ export function buildReviewFlashcardsLocally(
     ];
   }
 
+  const cardTarget = targetCardCount({
+    sourceType: options?.sourceType,
+    textLength: text.length,
+  });
+  const limit = cardTarget.max;
   const cards: DraftFlashcard[] = [];
 
   const defPatterns = [
@@ -281,7 +343,7 @@ export function buildReviewFlashcardsLocally(
     while ((match = re.exec(text)) !== null) {
       const card = toReviewCard(match[1], match[2]);
       if (card) cards.push(card);
-      if (cards.length >= MAX_CARDS) return uniqueCards(cards);
+      if (cards.length >= limit) return uniqueCards(cards);
     }
   }
 
@@ -291,7 +353,7 @@ export function buildReviewFlashcardsLocally(
     .filter((line) => line.length >= 25 && line.length <= 240);
 
   for (const bullet of bullets) {
-    if (cards.length >= MAX_CARDS) break;
+    if (cards.length >= limit) break;
     if (/^.+:\s+.+$/.test(bullet)) {
       const [left, ...rest] = bullet.split(':');
       const card = toReviewCard(left, rest.join(':'));
@@ -310,14 +372,14 @@ export function buildReviewFlashcardsLocally(
   if (cards.length < MIN_CARDS) {
     const chunks = text.match(/[\s\S]{90,220}/g) ?? [text.slice(0, 220)];
     chunks.forEach((chunk, i) => {
-      if (cards.length >= MAX_CARDS) return;
+      if (cards.length >= limit) return;
       const snippet = chunk.trim().replace(/\s+/g, ' ');
       const card = toReviewCard(`Key point ${i + 1}`, snippet);
       if (card) cards.push(card);
     });
   }
 
-  return uniqueCards(cards).slice(0, MAX_CARDS);
+  return uniqueCards(cards).slice(0, limit);
 }
 
 /**
@@ -338,7 +400,7 @@ export async function buildFlashcardsFromText(
   try {
     const aiCards = await buildFlashcardsWithAiText(text, options);
     if (aiCards?.length) {
-      return { cards: aiCards.slice(0, MAX_CARDS), usedAi: true };
+      return { cards: aiCards, usedAi: true };
     }
   } catch (error) {
     const aiError = error instanceof Error ? error.message : 'AI request failed';
@@ -433,18 +495,30 @@ export async function buildFlashcardsFromTutorReply(input: {
   }
 
   try {
+    const tutorTarget = targetCardCount({ textLength: reply.length });
+    const tutorLimit = Math.min(tutorTarget.max, 16);
     const content = await generateAiText({
       system: [
         'You are Study Buddy, an academic research tutor.',
         'Convert the tutor answer into exam-review flashcards.',
         'Do NOT write quiz questions. Titles must be concept names.',
         'Each card needs title + a BULLETED explanation (4–7 lines starting with "• "; never one paragraph).',
+        'ALWAYS include one bullet that starts with "Example: " matched to the subject domain.',
+        exampleStyleInstruction({
+          subject: input.subject,
+          filename: input.subject,
+          textSample: reply.slice(0, 1200),
+        }),
         'Title must be the most important concept name (2–6 words), never a truncated sentence starter.',
         'Use ONLY the academic content. Ignore any meta about missing flashcards, AI errors, tips, or app features.',
         'Do not mention chat, tutors, or that this came from an AI reply.',
         'Plain text only — never use markdown (no **, __, `, or # headings).',
-        'Return ONLY valid JSON array with keys "title" and "explanation".',
-        'Create 4 to 12 cards from the most important ideas in the answer.',
+        'Return ONLY valid JSON array with keys "title", "explanation", and optional "example".',
+        cardCountInstruction({
+          ...tutorTarget,
+          max: tutorLimit,
+          suggested: Math.min(tutorTarget.suggested, tutorLimit),
+        }),
       ].join(' '),
       user: [
         input.subject ? `Subject focus: ${input.subject}` : '',
@@ -458,9 +532,9 @@ export async function buildFlashcardsFromTutorReply(input: {
       temperature: 0.3,
     });
 
-    const cards = parseGeminiCards(content).filter(isStudyContentCard);
+    const cards = parseGeminiCards(content, tutorLimit).filter(isStudyContentCard);
     if (cards.length) {
-      return { cards: cards.slice(0, MAX_CARDS), usedAi: true };
+      return { cards, usedAi: true };
     }
   } catch (error) {
     return {

@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 
-import { extractTextFromPdfBytes } from './pdfText';
+import { estimatePdfPageCount, extractTextFromPdfBytes } from './pdfText';
 import type { SourceKind } from './sourceMime';
 
 export type ExtractedContent = {
@@ -35,6 +35,15 @@ function decodeBase64ToBytes(base64: string): Uint8Array {
   }
 
   return bytes;
+}
+
+/** Best-effort PDF page count from an already-loaded base64 payload. */
+export function estimatePdfPagesFromBase64(base64: string): number | undefined {
+  try {
+    return estimatePdfPageCount(decodeBase64ToBytes(base64));
+  } catch {
+    return undefined;
+  }
 }
 
 async function readFileBase64(uri: string): Promise<string> {

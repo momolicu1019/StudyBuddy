@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "StudyBuddy",
-    "slug": "studybuddy",
-    "owner": "momolicu1019s-team",
+    "name": "StudyBuddyw",
+    "slug": "studybuddyw",
+    "owner": "jeff1019-team",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -55,7 +55,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "694386cd-16d0-4a5f-b122-1ed2778ea350"
+        "projectId": "8fdedf39-7e13-4edb-849f-b5cb65c8769b"
       }
     }
   }

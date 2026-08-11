@@ -1,5 +1,6 @@
 import type { Flashcard, Subject, TutorReply } from '../api/types';
 import { isAiConfigured } from './aiConfig';
+import { sanitizeStudyText } from './explanationFormat';
 import { friendlyAiError, generateAiText } from './geminiClient';
 
 export type TutorMessage = {
@@ -170,6 +171,8 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
     'You are Study Buddy AI Tutor, a friendly and accurate study coach.',
     'Answer the student question directly and clearly with useful academic content.',
     'Use short paragraphs, numbered steps, or bullets when helpful.',
+    'Write plain text only — never use markdown (no **, __, *, #, backticks) and never use LaTeX or math markup (no $, $$, \\frac, \\times, \\text{}).',
+    'For formulas, write normal readable text with unicode symbols when useful (for example: V_total = V_1 = V_2 = … and V = I × R).',
     'Prefer facts from the student notes when they are relevant.',
     'If notes are missing or incomplete, still teach the topic using solid general knowledge — do not apologize about missing flashcards.',
     'Never say phrases like “since you don’t have flashcards”, “I couldn’t find matching flashcards”, or “generate flashcards first”.',
@@ -192,7 +195,7 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
     user: userContent,
     temperature: 0.4,
   });
-  return reply || null;
+  return reply ? sanitizeStudyText(reply) : null;
 }
 
 function answerFromNotes(ctx: TutorContext): string {
@@ -287,9 +290,10 @@ export async function answerTutorQuestion(
   try {
     const cloud = await askCloudTutor({ ...ctx, message: text });
     if (cloud) {
+      const reply = sanitizeStudyText(cloud);
       return {
-        reply: cloud,
-        allow_flashcards: isFlashcardWorthyTutorReply(cloud),
+        reply,
+        allow_flashcards: isFlashcardWorthyTutorReply(reply),
       };
     }
   } catch (error) {
@@ -301,14 +305,14 @@ export async function answerTutorQuestion(
         allow_flashcards: false,
       };
     }
-    const reply = answerFromNotes({ ...ctx, message: text });
+    const reply = sanitizeStudyText(answerFromNotes({ ...ctx, message: text }));
     return {
       reply,
       allow_flashcards: isFlashcardWorthyTutorReply(reply),
     };
   }
 
-  const reply = answerFromNotes({ ...ctx, message: text });
+  const reply = sanitizeStudyText(answerFromNotes({ ...ctx, message: text }));
   return {
     reply,
     allow_flashcards: isFlashcardWorthyTutorReply(reply),

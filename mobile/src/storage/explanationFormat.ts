@@ -3,13 +3,124 @@
  * Keeps letters, numbers, punctuation, and simple bullets.
  */
 export function sanitizeFlashcardText(text: string): string {
-  return text
-    .replace(/\r/g, '\n')
-    // Paired markdown emphasis / code
+  return sanitizeStudyText(text);
+}
+
+/**
+ * Convert common LaTeX / math markup into plain readable text for students.
+ */
+export function sanitizeLatex(text: string): string {
+  let out = text.replace(/\r/g, '\n');
+
+  // Display / inline math fences → keep inner content
+  out = out.replace(/\$\$([\s\S]*?)\$\$/g, (_, inner: string) => inner.trim());
+  out = out.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner: string) => inner.trim());
+  out = out.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner: string) => inner.trim());
+  out = out.replace(/\$([^$\n]+?)\$/g, (_, inner: string) => inner.trim());
+
+  // Nested text wrappers
+  for (let i = 0; i < 4; i += 1) {
+    const next = out
+      .replace(/\\(?:text|mathrm|mathbf|mathit|textrm|textsf|textbf|textit|operatorname)\s*\{([^{}]*)\}/g, '$1')
+      .replace(/\\(?:left|right)\s*/g, '')
+      .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '($1)/($2)')
+      .replace(/\\sqrt\s*\{([^{}]*)\}/g, '√($1)')
+      .replace(/\\sqrt\s*/g, '√')
+      .replace(/_\{([^{}]*)\}/g, '_$1')
+      .replace(/\^\{([^{}]*)\}/g, '^$1');
+    if (next === out) break;
+    out = next;
+  }
+
+  const symbolMap: Record<string, string> = {
+    times: '×',
+    cdot: '·',
+    div: '÷',
+    pm: '±',
+    mp: '∓',
+    leq: '≤',
+    le: '≤',
+    geq: '≥',
+    ge: '≥',
+    neq: '≠',
+    ne: '≠',
+    approx: '≈',
+    sim: '~',
+    infty: '∞',
+    dots: '…',
+    ldots: '…',
+    cdots: '…',
+    vdots: '…',
+    to: '→',
+    rightarrow: '→',
+    leftarrow: '←',
+    Rightarrow: '⇒',
+    Leftarrow: '⇐',
+    iff: '⇔',
+    subset: '⊂',
+    subseteq: '⊆',
+    superset: '⊃',
+    superseteq: '⊇',
+    in: '∈',
+    notin: '∉',
+    cup: '∪',
+    cap: '∩',
+    emptyset: '∅',
+    degree: '°',
+    circ: '°',
+    angstrom: 'Å',
+    ohm: 'Ω',
+    Omega: 'Ω',
+    alpha: 'α',
+    beta: 'β',
+    gamma: 'γ',
+    delta: 'δ',
+    Delta: 'Δ',
+    epsilon: 'ε',
+    theta: 'θ',
+    Theta: 'Θ',
+    lambda: 'λ',
+    mu: 'μ',
+    pi: 'π',
+    Pi: 'Π',
+    sigma: 'σ',
+    Sigma: 'Σ',
+    phi: 'φ',
+    omega: 'ω',
+    sum: 'Σ',
+    prod: 'Π',
+    int: '∫',
+  };
+
+  out = out.replace(/\\([A-Za-z]+)\b/g, (_, name: string) => {
+    return symbolMap[name] ?? '';
+  });
+
+  // Escape leftovers and spacing commands
+  out = out
+    .replace(/\\[{}]/g, (m) => m.slice(1))
+    .replace(/\\[,;:!]/g, ' ')
+    .replace(/\\quad\b/g, ' ')
+    .replace(/\\qquad\b/g, ' ')
+    .replace(/\\\\/g, '\n')
+    .replace(/\\/g, '');
+
+  return out;
+}
+
+/**
+ * Plain-text cleanup for tutor replies and flashcard content:
+ * removes markdown emphasis and converts LaTeX into readable symbols.
+ */
+export function sanitizeStudyText(text: string): string {
+  let out = sanitizeLatex(String(text ?? ''));
+
+  out = out
+    // Paired markdown emphasis / code (avoid touching math-like identifiers such as V_total)
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
-    .replace(/\*([^*\n]+)\*/g, '$1')
-    .replace(/_([^_\n]+)_/g, '$1')
+    .replace(/(^|[\s(])\*([^*\n]+)\*([\s).,!?:;]|$)/g, '$1$2$3')
+    .replace(/(^|[\s(])_([^_\n]+)_([\s).,!?:;]|$)/g, '$1$2$3')
     .replace(/~~([^~\n]+)~~/g, '$1')
     .replace(/`([^`\n]+)`/g, '$1')
     // Headings, links, images
@@ -29,6 +140,8 @@ export function sanitizeFlashcardText(text: string): string {
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+
+  return out;
 }
 
 /** Strip leftover markup that often appears at the start of a bullet/line. */

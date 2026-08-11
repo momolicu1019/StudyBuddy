@@ -2,7 +2,7 @@
   "expo": {
     "name": "StudyBuddy",
     "slug": "studybuddy",
-    "owner": "nino1019w",
+    "owner": "momolicu1019s-team",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -55,7 +55,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "28e3424a-74a4-4e3d-ae44-a45299bd94ba"
+        "projectId": "694386cd-16d0-4a5f-b122-1ed2778ea350"
       }
     }
   }

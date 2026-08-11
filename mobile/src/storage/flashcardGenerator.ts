@@ -19,7 +19,7 @@ import {
 } from './sourceMime';
 
 const MAX_SOURCE_CHARS = 14000;
-const MAX_INLINE_CHARS = 12_000_000; // ~9MB base64 budget guard
+const MAX_INLINE_CHARS = 40_000_000; // ~30MB base64 budget guard
 
 function cleanText(raw: string): string {
   return raw

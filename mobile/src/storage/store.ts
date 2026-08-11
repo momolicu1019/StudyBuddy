@@ -1,12 +1,54 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { EMPTY_LOCAL_DB, type LocalDatabase } from './schema';
+import { EMPTY_LOCAL_DB, type LocalDatabase, type TutorChat } from './schema';
 
 const STORAGE_KEY = 'studybuddy.local.v1';
+
+function normalizeTutorChat(raw: Partial<TutorChat>): TutorChat | null {
+  if (typeof raw.id !== 'number') return null;
+  const messages = Array.isArray(raw.messages)
+    ? raw.messages
+        .filter(
+          (m): m is TutorChat['messages'][number] =>
+            !!m &&
+            (m.role === 'user' || m.role === 'assistant') &&
+            typeof m.text === 'string',
+        )
+        .map((m) => ({
+          role: m.role,
+          text: m.text,
+          allow_flashcards: m.allow_flashcards,
+          created_at:
+            typeof m.created_at === 'string'
+              ? m.created_at
+              : new Date().toISOString(),
+        }))
+    : [];
+
+  const created =
+    typeof raw.created_at === 'string' ? raw.created_at : new Date().toISOString();
+  return {
+    id: raw.id,
+    subject: typeof raw.subject === 'string' ? raw.subject : undefined,
+    title:
+      typeof raw.title === 'string' && raw.title.trim()
+        ? raw.title.trim()
+        : 'Chat',
+    messages,
+    created_at: created,
+    updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : created,
+  };
+}
 
 function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
   const base = JSON.parse(JSON.stringify(EMPTY_LOCAL_DB)) as LocalDatabase;
   if (!raw) return base;
+
+  const tutorChats = Array.isArray(raw.tutor_chats)
+    ? raw.tutor_chats
+        .map((chat) => normalizeTutorChat(chat as Partial<TutorChat>))
+        .filter((chat): chat is TutorChat => !!chat)
+    : [];
 
   return {
     subjects: raw.subjects ?? [],
@@ -20,6 +62,7 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
     },
     quizzes: raw.quizzes ?? [],
     deadlines: Array.isArray(raw.deadlines) ? raw.deadlines : [],
+    tutor_chats: tutorChats,
     settings: {
       cloud_sync_enabled: raw.settings?.cloud_sync_enabled ?? false,
       daily_goal_minutes: raw.settings?.daily_goal_minutes ?? 25,
@@ -28,6 +71,7 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
     next_card_id: raw.next_card_id ?? 1,
     next_pdf_id: raw.next_pdf_id ?? 1,
     next_deadline_id: raw.next_deadline_id ?? 1,
+    next_tutor_chat_id: raw.next_tutor_chat_id ?? 1,
   };
 }
 

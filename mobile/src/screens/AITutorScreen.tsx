@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { useHeaderHeight } from '@react-navigation/elements';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -22,6 +23,7 @@ import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
 import { buildFlashcardsFromTutorReply } from '../storage/flashcardGenerator';
 import { friendlyAiError } from '../storage/geminiClient';
+import type { TutorChat } from '../storage/schema';
 import {
   isCloudTutorConfigured,
   isFlashcardWorthyTutorReply,
@@ -39,6 +41,28 @@ type ChatItem = {
 
 const FOLDER_ICONS = ['📚', '🧬', '🔬', '➗', '🌎', '📖', '💻', '🎨'];
 
+function greetingMessage(subject: string | undefined, cloudReady: boolean): ChatItem {
+  return {
+    role: 'assistant',
+    text: subject
+      ? `Hi! I'm your AI Tutor for ${subject}. Ask a real question and I'll answer it using your notes${cloudReady ? ' and AI' : ''}.`
+      : `Hi! I'm your Study Buddy AI Tutor. Ask a content question (for example “What is photosynthesis?”) and I'll answer it${cloudReady ? '' : ' from your flashcards'}.`,
+  };
+}
+
+function formatChatWhen(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
 export function AITutorScreen({ route }: Props) {
   const subject = route.params?.subject;
   const {
@@ -51,19 +75,20 @@ export function AITutorScreen({ route }: Props) {
   const headerHeight = useHeaderHeight();
   const tabBarHeight = useContext(BottomTabBarHeightContext) ?? 0;
   const scrollRef = useRef<ScrollView>(null);
+  const activeChatIdRef = useRef<number | null>(null);
+  const cloudReady = isCloudTutorConfigured();
+
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const cloudReady = isCloudTutorConfigured();
+  const [activeChatId, setActiveChatId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatItem[]>([
-    {
-      role: 'assistant',
-      text: subject
-        ? `Hi! I'm your AI Tutor for ${subject}. Ask a real question and I'll answer it using your notes${cloudReady ? ' and AI' : ''}.`
-        : `Hi! I'm your Study Buddy AI Tutor. Ask a content question (for example “What is photosynthesis?”) and I'll answer it${cloudReady ? '' : ' from your flashcards'}.`,
-    },
+    greetingMessage(subject, cloudReady),
   ]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [chatHistory, setChatHistory] = useState<TutorChat[]>([]);
+  const [deleteChatId, setDeleteChatId] = useState<number | null>(null);
 
   const [cardSource, setCardSource] = useState<{
     reply: string;
@@ -77,6 +102,8 @@ export function AITutorScreen({ route }: Props) {
   const [folderName, setFolderName] = useState('');
   const [folderIcon, setFolderIcon] = useState('📚');
 
+  activeChatIdRef.current = activeChatId;
+
   const matchedSubjectId = useMemo(() => {
     if (!subject) return subjects[0]?.id ?? null;
     return (
@@ -86,6 +113,23 @@ export function AITutorScreen({ route }: Props) {
       null
     );
   }, [subject, subjects]);
+
+  const pendingDelete = chatHistory.find((c) => c.id === deleteChatId) ?? null;
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const list = await api.getTutorChats();
+      setChatHistory(list);
+    } catch {
+      setChatHistory([]);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadHistory();
+    }, [loadHistory]),
+  );
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -124,6 +168,84 @@ export function AITutorScreen({ route }: Props) {
     setSaveFolderId(matchedSubjectId);
   }
 
+  function startNewChat() {
+    if (busy) return;
+    setActiveChatId(null);
+    setMessages([greetingMessage(subject, cloudReady)]);
+    setInput('');
+    setHistoryOpen(false);
+    showToast('Started a new chat');
+  }
+
+  async function openHistoryChat(chat: TutorChat) {
+    if (busy) return;
+    try {
+      const fresh = await api.getTutorChat(chat.id);
+      setActiveChatId(fresh.id);
+      setMessages(
+        fresh.messages.map((m) => ({
+          role: m.role,
+          text: m.text,
+          allowFlashcards: m.allow_flashcards,
+        })),
+      );
+      setHistoryOpen(false);
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollToEnd({ animated: false });
+      });
+    } catch {
+      showToast('Could not open that chat');
+      await loadHistory();
+    }
+  }
+
+  async function confirmDeleteChat() {
+    if (deleteChatId == null) return;
+    const id = deleteChatId;
+    try {
+      await api.deleteTutorChat(id);
+      if (activeChatIdRef.current === id) {
+        setActiveChatId(null);
+        setMessages([greetingMessage(subject, cloudReady)]);
+      }
+      setDeleteChatId(null);
+      await loadHistory();
+      showToast('Chat deleted');
+    } catch {
+      showToast('Could not delete chat');
+    }
+  }
+
+  async function persistTurn(
+    userText: string,
+    assistantText: string,
+    allowFlashcards: boolean,
+  ) {
+    const payload = [
+      { role: 'user' as const, text: userText },
+      {
+        role: 'assistant' as const,
+        text: assistantText,
+        allow_flashcards: allowFlashcards,
+      },
+    ];
+
+    try {
+      if (activeChatIdRef.current == null) {
+        const created = await api.createTutorChat({
+          subject,
+          messages: payload,
+        });
+        setActiveChatId(created.id);
+      } else {
+        await api.appendTutorChatMessages(activeChatIdRef.current, payload);
+      }
+      await loadHistory();
+    } catch {
+      showToast('Could not save this chat');
+    }
+  }
+
   async function send() {
     const text = input.trim();
     if (!text) {
@@ -150,18 +272,22 @@ export function AITutorScreen({ route }: Props) {
           allowFlashcards,
         },
       ]);
+      await persistTurn(text, res.reply, allowFlashcards);
       requestAnimationFrame(() => {
         scrollRef.current?.scrollToEnd({ animated: true });
       });
     } catch {
+      const fallback =
+        'I could not answer that just now. Please try asking again in a moment.';
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          text: 'I could not answer that just now. Please try asking again in a moment.',
+          text: fallback,
           allowFlashcards: false,
         },
       ]);
+      await persistTurn(text, fallback, false);
     } finally {
       setBusy(false);
     }
@@ -264,20 +390,48 @@ export function AITutorScreen({ route }: Props) {
             scrollRef.current?.scrollToEnd({ animated: true })
           }
         >
-          <Text style={styles.h1}>✦ AI Tutor</Text>
-          <Text style={styles.sub}>
-            Ask questions and get direct answers
-            {subject ? ` for ${subject}` : ''}.
-            {!cloudReady
-              ? ' AI is offline on this device right now.'
-              : ' AI is ready.'}{' '}
-            You can turn answers into flashcards.
-          </Text>
+          <View style={styles.headerRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.h1}>✦ AI Tutor</Text>
+              <Text style={styles.sub}>
+                Ask questions and get direct answers
+                {subject ? ` for ${subject}` : ''}.
+                {!cloudReady
+                  ? ' AI is offline on this device right now.'
+                  : ' AI is ready.'}{' '}
+                You can turn answers into flashcards.
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.toolbar}>
+            <PrimaryButton
+              label="History"
+              variant="secondary"
+              onPress={() => {
+                void loadHistory();
+                setHistoryOpen(true);
+              }}
+              style={styles.toolbarBtn}
+            />
+            <PrimaryButton
+              label="New chat"
+              variant="secondary"
+              onPress={startNewChat}
+              style={styles.toolbarBtn}
+            />
+          </View>
+
+          {activeChatId != null ? (
+            <Text style={styles.continuingHint}>
+              Continuing a saved chat — ask another question anytime.
+            </Text>
+          ) : null}
 
           <View style={styles.chat}>
             {messages.map((m, i) => (
               <Card
-                key={`${m.role}-${i}`}
+                key={`${activeChatId ?? 'new'}-${m.role}-${i}`}
                 style={[
                   styles.bubble,
                   m.role === 'user' ? styles.userBubble : styles.botBubble,
@@ -332,6 +486,82 @@ export function AITutorScreen({ route }: Props) {
           />
         </View>
       </View>
+
+      <AppModal
+        visible={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+      >
+        <Text style={styles.modalTitle}>Chat history</Text>
+        <Text style={[styles.sub, { marginTop: 8, marginBottom: 12 }]}>
+          Reopen a past conversation or continue where you left off.
+        </Text>
+
+        <PrimaryButton
+          label="+ Start new chat"
+          onPress={startNewChat}
+          style={{ marginBottom: 14 }}
+        />
+
+        {chatHistory.length === 0 ? (
+          <Card>
+            <Text style={styles.subEmpty}>
+              No saved chats yet. Ask a question and it will appear here.
+            </Text>
+          </Card>
+        ) : (
+          <View style={styles.historyList}>
+            {chatHistory.map((chat) => (
+              <View key={chat.id} style={styles.historyRow}>
+                <Pressable
+                  style={styles.historyMain}
+                  onPress={() => void openHistoryChat(chat)}
+                >
+                  <Text style={styles.historyTitle} numberOfLines={2}>
+                    {chat.title}
+                  </Text>
+                  <Text style={styles.historyMeta}>
+                    {chat.subject ? `${chat.subject} · ` : ''}
+                    {formatChatWhen(chat.updated_at)}
+                    {activeChatId === chat.id ? ' · Open' : ''}
+                  </Text>
+                </Pressable>
+                <PrimaryButton
+                  label="Delete"
+                  variant="danger"
+                  onPress={() => setDeleteChatId(chat.id)}
+                  style={styles.historyDelete}
+                />
+              </View>
+            ))}
+          </View>
+        )}
+      </AppModal>
+
+      <AppModal
+        visible={deleteChatId !== null}
+        onClose={() => setDeleteChatId(null)}
+      >
+        <Text style={styles.modalTitle}>Delete this chat?</Text>
+        <Text style={[styles.sub, { marginTop: 8 }]}>
+          {pendingDelete
+            ? `Remove “${pendingDelete.title}”? This cannot be undone.`
+            : 'This cannot be undone.'}
+        </Text>
+        <View style={[styles.row, { marginTop: 20 }]}>
+          <PrimaryButton
+            label="Cancel"
+            variant="secondary"
+            onPress={() => setDeleteChatId(null)}
+            style={styles.flexBtn}
+          />
+          <PrimaryButton
+            label="Delete"
+            variant="danger"
+            onPress={() => void confirmDeleteChat()}
+            style={styles.flexBtn}
+          />
+        </View>
+      </AppModal>
 
       <AppModal
         visible={!!cardSource}
@@ -458,8 +688,18 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   chatScroll: { flex: 1 },
   content: { padding: 16, paddingBottom: 24, flexGrow: 1 },
+  headerRow: { marginBottom: 4 },
   h1: { fontSize: 30, fontWeight: '800', color: colors.ink },
   sub: { color: colors.muted, marginTop: 6, marginBottom: 18, lineHeight: 20 },
+  subEmpty: { color: colors.muted, lineHeight: 20, marginBottom: 0 },
+  toolbar: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  toolbarBtn: { flex: 1 },
+  continuingHint: {
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 13,
+    marginBottom: 12,
+  },
   chat: { gap: 12 },
   bubble: { padding: 16 },
   userBubble: {
@@ -493,6 +733,31 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   modalTitle: { fontSize: 22, fontWeight: '800', color: colors.ink },
+  historyList: { gap: 10 },
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 16,
+    padding: 12,
+  },
+  historyMain: { flex: 1 },
+  historyTitle: {
+    color: colors.ink,
+    fontWeight: '800',
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  historyMeta: {
+    color: colors.muted,
+    fontSize: 12,
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  historyDelete: { minWidth: 84 },
   sample: {
     marginTop: 14,
     padding: 14,

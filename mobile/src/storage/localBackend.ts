@@ -2,7 +2,7 @@
  * Local-first backend for Study Buddy.
  *
  * Primary storage (on device):
- *   Flashcards · Subjects · PDFs · Progress · Quizzes · Deadlines · Settings
+ *   Flashcards · Subjects · PDFs · Progress · Quizzes · Deadlines · Tutor chats · Settings
  *
  * Optional cloud (stubs in ./cloud.ts):
  *   Backup · Account · Sync · Devices
@@ -22,11 +22,23 @@ import type {
 } from '../api/types';
 import { formatExplanationAsBullets, normalizeKeyPointTitle } from './explanationFormat';
 import { persistSourceFile } from './pdfs';
-import type { Deadline } from './schema';
+import type { Deadline, TutorChat, TutorChatMessage } from './schema';
 import type { SourceKind } from './sourceMime';
 import { labelForSource } from './sourceMime';
 import { loadLocalDb, updateLocalDb } from './store';
 import { generateFlashcardsViaGeminiPipeline } from './studyPipeline';
+
+const MAX_TUTOR_CHATS = 40;
+
+function titleFromQuestion(text: string): string {
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  if (!cleaned) return 'Chat';
+  return cleaned.length > 56 ? `${cleaned.slice(0, 53).trimEnd()}…` : cleaned;
+}
+
+function sortTutorChats(chats: TutorChat[]): TutorChat[] {
+  return [...chats].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+}
 
 function recountMastered(cards: Flashcard[]): number {
   return cards.filter((c) => c.mastered).length;
@@ -403,6 +415,88 @@ export const localBackend = {
       const before = db.deadlines.length;
       db.deadlines = db.deadlines.filter((d) => d.id !== id);
       if (db.deadlines.length === before) throw new Error('Deadline not found');
+    });
+  },
+
+  async getTutorChats(): Promise<TutorChat[]> {
+    const db = await loadLocalDb();
+    return sortTutorChats(db.tutor_chats);
+  },
+
+  async getTutorChat(id: number): Promise<TutorChat> {
+    const db = await loadLocalDb();
+    const chat = db.tutor_chats.find((c) => c.id === id);
+    if (!chat) throw new Error('Chat not found');
+    return chat;
+  },
+
+  async createTutorChat(input: {
+    subject?: string;
+    messages: Omit<TutorChatMessage, 'created_at'>[];
+  }): Promise<TutorChat> {
+    if (!input.messages.length) throw new Error('Chat needs at least one message');
+
+    const now = new Date().toISOString();
+    const firstUser = input.messages.find((m) => m.role === 'user');
+    let created!: TutorChat;
+
+    await updateLocalDb((db) => {
+      created = {
+        id: db.next_tutor_chat_id,
+        subject: input.subject?.trim() || undefined,
+        title: titleFromQuestion(firstUser?.text ?? 'Chat'),
+        messages: input.messages.map((m) => ({
+          role: m.role,
+          text: m.text,
+          allow_flashcards: m.allow_flashcards,
+          created_at: now,
+        })),
+        created_at: now,
+        updated_at: now,
+      };
+      db.next_tutor_chat_id += 1;
+      db.tutor_chats.unshift(created);
+      if (db.tutor_chats.length > MAX_TUTOR_CHATS) {
+        db.tutor_chats = sortTutorChats(db.tutor_chats).slice(0, MAX_TUTOR_CHATS);
+      }
+    });
+    return created;
+  },
+
+  async appendTutorChatMessages(
+    id: number,
+    messages: Omit<TutorChatMessage, 'created_at'>[],
+  ): Promise<TutorChat> {
+    if (!messages.length) throw new Error('No messages to append');
+
+    const now = new Date().toISOString();
+    let updated!: TutorChat;
+    await updateLocalDb((db) => {
+      const chat = db.tutor_chats.find((c) => c.id === id);
+      if (!chat) throw new Error('Chat not found');
+      chat.messages.push(
+        ...messages.map((m) => ({
+          role: m.role,
+          text: m.text,
+          allow_flashcards: m.allow_flashcards,
+          created_at: now,
+        })),
+      );
+      chat.updated_at = now;
+      if (!chat.title || chat.title === 'Chat') {
+        const firstUser = chat.messages.find((m) => m.role === 'user');
+        if (firstUser) chat.title = titleFromQuestion(firstUser.text);
+      }
+      updated = chat;
+    });
+    return updated;
+  },
+
+  async deleteTutorChat(id: number): Promise<void> {
+    await updateLocalDb((db) => {
+      const before = db.tutor_chats.length;
+      db.tutor_chats = db.tutor_chats.filter((c) => c.id !== id);
+      if (db.tutor_chats.length === before) throw new Error('Chat not found');
     });
   },
 };

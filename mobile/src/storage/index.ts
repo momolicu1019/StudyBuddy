@@ -12,7 +12,7 @@ export {
 } from './cloud';
 export type { GoogleUser, AuthUser, AuthSession, CloudActionResult } from './cloud';
 export { loadLocalDb, resetLocalDb } from './store';
-export type { LocalDatabase, AppSettings, StoredSource, Deadline } from './schema';
+export type { LocalDatabase, AppSettings, StoredSource, Deadline, TutorChat, TutorChatMessage } from './schema';
 export {
   daysUntilDue,
   formatDueDate,

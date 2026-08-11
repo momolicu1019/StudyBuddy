@@ -10,11 +10,14 @@ export type LocalDatabase = {
   progress: Stats & { quizzes_taken: number };
   quizzes: QuizResultRecord[];
   deadlines: Deadline[];
+  /** Saved AI Tutor conversations the student can reopen. */
+  tutor_chats: TutorChat[];
   settings: AppSettings;
   next_subject_id: number;
   next_card_id: number;
   next_pdf_id: number;
   next_deadline_id: number;
+  next_tutor_chat_id: number;
 };
 
 /** Student deadline / due-date entry. `due_date` is YYYY-MM-DD (local calendar day). */
@@ -24,6 +27,25 @@ export type Deadline = {
   due_date: string;
   completed: boolean;
   created_at: string;
+};
+
+export type TutorChatMessage = {
+  role: 'user' | 'assistant';
+  text: string;
+  allow_flashcards?: boolean;
+  created_at: string;
+};
+
+/** One AI Tutor conversation thread. */
+export type TutorChat = {
+  id: number;
+  /** Optional subject name focus (matches AITutor route param). */
+  subject?: string;
+  /** Short label — usually the first student question. */
+  title: string;
+  messages: TutorChatMessage[];
+  created_at: string;
+  updated_at: string;
 };
 
 export type StoredSource = {
@@ -63,6 +85,7 @@ export const EMPTY_LOCAL_DB: LocalDatabase = {
   },
   quizzes: [],
   deadlines: [],
+  tutor_chats: [],
   settings: {
     cloud_sync_enabled: false,
     daily_goal_minutes: 25,
@@ -71,6 +94,7 @@ export const EMPTY_LOCAL_DB: LocalDatabase = {
   next_card_id: 1,
   next_pdf_id: 1,
   next_deadline_id: 1,
+  next_tutor_chat_id: 1,
 };
 
 export type { DraftFlashcard };

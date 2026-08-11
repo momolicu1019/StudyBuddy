@@ -1,6 +1,8 @@
-from __future__ import annotations
-
-from app.card_counts import estimate_card_count, estimate_pdf_pages
+from app.card_counts import (
+    estimate_card_count,
+    estimate_pdf_pages,
+    is_situational_material,
+)
 
 
 def _pdf_with_pages(n: int) -> bytes:
@@ -25,3 +27,9 @@ def test_estimate_card_count_scales_with_pages():
 def test_estimate_card_count_photo_stays_small():
     count = estimate_card_count("photo", b"x" * 500_000, filename="notes.jpg")
     assert 5 <= count <= 14
+
+
+def test_is_situational_material_detects_law():
+    assert is_situational_material("Contracts Law Midterm.pdf")
+    assert is_situational_material("criminal procedure notes")
+    assert not is_situational_material("Biology photosynthesis chapter")

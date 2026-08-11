@@ -10,6 +10,11 @@ import {
 } from './cardCount';
 import { estimatePdfPagesFromBase64 } from './contentExtract';
 import {
+  exampleFieldHint,
+  exampleStyleInstruction,
+  isSituationalMaterial,
+} from './exampleStyle';
+import {
   isWeakKeyPointTitle,
   normalizeKeyPointTitle,
   sanitizeFlashcardText,
@@ -186,8 +191,19 @@ function buildAnalyzePrompt(args: {
   filename?: string;
   fromExtractedText?: boolean;
   cardTarget: CardCountTarget;
+  textSample?: string;
 }): string {
   const countLine = cardCountInstruction(args.cardTarget);
+  const situational = isSituationalMaterial([
+    args.filename,
+    args.sourceLabel,
+    args.textSample,
+  ]);
+  const exampleRules = exampleStyleInstruction({
+    filename: args.filename,
+    sourceLabel: args.sourceLabel,
+    situational,
+  });
   return [
     'You are Study Buddy, an academic research tutor who writes informative study summaries.',
     args.fromExtractedText
@@ -202,14 +218,16 @@ function buildAnalyzePrompt(args: {
     '    {',
     '      "title": "short complete concept name (2-6 words)",',
     '      "explanation": "bullet list string (see rules)",',
-    '      "example": "one concrete case, mini problem, or real-world application"',
+    `      ${exampleFieldHint(situational)}`,
     '    }',
     '  ]',
     '}',
     '',
     'Title rules (critical):',
     '- title must be the MOST IMPORTANT concept name for that card (a noun phrase / term / process name).',
-    '- Good examples: "Water Cycle", "Photosynthesis", "Newton’s Second Law", "Mitochondria".',
+    situational
+      ? '- Good examples: "Offer and Acceptance", "Duty of Care", "Miranda Rights", "Quiet Enjoyment".'
+      : '- Good examples: "Water Cycle", "Photosynthesis", "Newton’s Second Law", "Mitochondria".',
     '- Bad examples: "The rain in", "Photosynthesis is the", "According to the notes", sentence fragments, or truncated phrases.',
     '- Never end a title with a preposition/article (in, of, the, a, and, to, for, with…).',
     '- Prefer 2 to 6 words. Do not write a full sentence as the title.',
@@ -217,12 +235,12 @@ function buildAnalyzePrompt(args: {
     'Writing style for each explanation (critical):',
     '- ALWAYS write the explanation as a BULLET LIST — never one long paragraph.',
     '- Put each point on its own line starting with "• " (Unicode bullet + space).',
-    '- Use 4 to 7 short bullets covering: what it is, how it works, key details, formulas, and why it matters.',
-    '- ALWAYS include one bullet that starts with "Example: " and gives a concrete case, worked mini-problem, or real-world application from the material (or a faithful illustration of the concept).',
+    '- Use 4 to 7 short bullets covering: what it is, how it works, key details, formulas/elements, and why it matters.',
+    `- ${exampleRules}`,
     '- For very large sets (30+ cards), 4 focused bullets per card is enough (still include the Example bullet).',
     '- Keep each bullet to one clear idea (about 1 short sentence).',
     '- Do not start bullets with markdown like **, *, __, or #.',
-    '- Include formulas, mechanisms, comparisons, cause/effect, and examples from the material when present.',
+    '- Include formulas, mechanisms, comparisons, cause/effect, elements/tests, and examples from the material when present.',
     '',
     'Hard bans — never do these:',
     '- Do NOT write a single paragraph wall of text.',
@@ -230,6 +248,7 @@ function buildAnalyzePrompt(args: {
     '- Do NOT narrate OCR/visual structure, boxes, columns, or where text appears.',
     '- Do NOT invent facts that are not supported by the material.',
     '- Do NOT compress a long multi-page document into only ~12 cards when many distinct concepts are present.',
+    '- Do NOT use science-lab style examples for law, ethics, or policy material.',
     args.fromExtractedText
       ? '- Stay faithful to the exact OCR wording for names, definitions, formulas, numbers, and quoted phrases. Summarize importance, but do not replace source wording with unrelated paraphrases when the original terms matter.'
       : '',
@@ -237,7 +256,9 @@ function buildAnalyzePrompt(args: {
     'Other rules:',
     `- ${countLine}`,
     '- Titles must be concept names, not quiz questions (no What/Why/How/Define...).',
-    '- Prefer definitions, processes, formulas, comparisons, theorems, and must-know facts.',
+    situational
+      ? '- Prefer doctrines, elements, tests, duties, rights, defenses, procedures, and leading rules.'
+      : '- Prefer definitions, processes, formulas, comparisons, theorems, and must-know facts.',
     '- Plain text only — never use markdown (no **, __, `, or # headings).',
   ]
     .filter(Boolean)
@@ -290,6 +311,7 @@ async function summarizeExactPhotoText(input: {
     filename: input.filename,
     fromExtractedText: true,
     cardTarget: input.cardTarget,
+    textSample: input.extractedText.slice(0, 2000),
   });
 
   const analysisRaw = await generateWithGemini(

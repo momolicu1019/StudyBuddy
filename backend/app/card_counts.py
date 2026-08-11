@@ -9,6 +9,22 @@ MIN_CARDS = 4
 MAX_CARDS_PHOTO = 14
 MAX_CARDS_DOC = 60
 
+_SITUATIONAL_HINT = re.compile(
+    r"\b(law|legal|statute|statutes|legislation|legislat|constitution|"
+    r"constitutional|criminal|civil|tort|torts|contract|contracts|property|"
+    r"evidence|procedure|jurisprudence|case\s*law|court|courts|litigation|"
+    r"rights|ethics|ethical|policy|policies|regulation|regulations|"
+    r"compliance|governance|negotiation|mediation|arbitration|criminology|"
+    r"forensic|business\s*law|family\s*law|labor\s*law|labour\s*law|"
+    r"tax\s*law|admin(?:istrative)?\s*law)\b",
+    re.IGNORECASE,
+)
+
+
+def is_situational_material(*hints: str | None) -> bool:
+    blob = " ".join(h for h in hints if h)
+    return bool(_SITUATIONAL_HINT.search(blob))
+
 
 def estimate_pdf_pages(data: bytes) -> int | None:
     """Best-effort PDF page count from object markers (no PDF library)."""

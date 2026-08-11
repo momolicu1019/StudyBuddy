@@ -118,6 +118,27 @@ def test_generate_scales_with_pdf_pages(client: TestClient):
     assert any("Example:" in card["answer"] for card in body["cards"])
 
 
+def test_generate_uses_situational_examples_for_law(client: TestClient):
+    draft = client.post(
+        "/api/flashcards/generate",
+        data={"source_type": "pdf", "filename": "contracts-law-notes.pdf"},
+    )
+    assert draft.status_code == 200
+    body = draft.json()
+    answers = " ".join(card["answer"] for card in body["cards"])
+    assert "Example:" in answers
+    assert (
+        "landlord" in answers.lower()
+        or "contract" in answers.lower()
+        or "negligence" in answers.lower()
+        or "tenant" in answers.lower()
+        or "miranda" in answers.lower()
+    )
+    # Should not fall back to science-lab style examples for law uploads.
+    assert "mitochondria" not in answers.lower()
+    assert "hypotenuse" not in answers.lower()
+
+
 def test_quiz_requires_saved_cards(client: TestClient):
     subject = client.post("/api/subjects", json={"name": "History", "icon": "🌎"}).json()
     quiz = client.get(f"/api/quiz/{subject['id']}")

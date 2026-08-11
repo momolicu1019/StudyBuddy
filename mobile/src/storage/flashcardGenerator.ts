@@ -9,6 +9,7 @@ import {
   targetCardCount,
 } from './cardCount';
 import { estimatePdfPagesFromBase64 } from './contentExtract';
+import { exampleStyleInstruction, isSituationalMaterial } from './exampleStyle';
 import { isWeakKeyPointTitle, normalizeKeyPointTitle, withExampleBullet } from './explanationFormat';
 import { generateAiText, generateWithGemini } from './geminiClient';
 import {
@@ -156,20 +157,37 @@ export function parseGeminiCards(
   return uniqueCards(cards);
 }
 
-function flashcardInstructions(maxHint?: string): string {
+function flashcardInstructions(
+  maxHint?: string,
+  styleHints?: { filename?: string; sourceType?: SourceKind; subject?: string; textSample?: string },
+): string {
+  const exampleRules = exampleStyleInstruction({
+    filename: styleHints?.filename,
+    sourceLabel: styleHints?.sourceType
+      ? labelForSource(styleHints.sourceType)
+      : undefined,
+    subject: styleHints?.subject,
+    situational: isSituationalMaterial([
+      styleHints?.filename,
+      styleHints?.subject,
+      styleHints?.textSample,
+      styleHints?.sourceType ? labelForSource(styleHints.sourceType) : undefined,
+    ]),
+  });
+
   return [
     'You are Study Buddy, an academic research tutor who writes informative study summaries.',
     'Create exam-review flashcards from the study material.',
     'Do NOT write quiz questions. Do NOT start titles with What/Why/How/Define.',
     'Each card: short concept title + a BULLETED explanation (never one long paragraph).',
-    'Title must be the MOST IMPORTANT concept name (2–6 words), e.g. "Water Cycle" or "Photosynthesis".',
+    'Title must be the MOST IMPORTANT concept name (2–6 words), e.g. "Water Cycle", "Photosynthesis", or for law "Duty of Care".',
     'Never use truncated sentence starters as titles (bad: "The rain in", "Photosynthesis is the").',
     'Never end a title with a preposition/article (in, of, the, a, and, to, for, with…).',
-    'Write explanation as 4 to 7 short lines, each starting with "• ", covering: what it is, how it works, key details, formulas, and why it matters.',
-    'ALWAYS include one bullet that starts with "Example: " with a concrete case, mini worked problem, or real-world application.',
+    'Write explanation as 4 to 7 short lines, each starting with "• ", covering: what it is, how it works, key details, formulas/elements, and why it matters.',
+    exampleRules,
     'Keep each bullet to one clear idea (about one short sentence).',
     'Do not start bullets with markdown like **, *, __, or #.',
-    'Include formulas, processes, comparisons, and examples when present in the source.',
+    'Include formulas, processes, comparisons, and domain-matched examples when present in the source.',
     'Never describe page/photo layout (no “at the top”, “on the left”, “this slide shows”, “the heading says”, “the image contains”).',
     'Never narrate OCR/visual structure; convert the content into conceptual knowledge only.',
     'Do not invent facts not supported by the material.',
@@ -217,7 +235,10 @@ export async function buildFlashcardsFromFile(input: {
           : undefined,
     });
     const prompt = [
-      flashcardInstructions(cardCountInstruction(cardTarget)),
+      flashcardInstructions(cardCountInstruction(cardTarget), {
+        filename: input.filename,
+        sourceType: input.sourceType,
+      }),
       '',
       `Source type: ${labelForSource(input.sourceType)}.`,
       input.filename ? `Filename: ${input.filename}` : '',
@@ -268,7 +289,11 @@ async function buildFlashcardsWithAiText(
   });
 
   const content = await generateAiText({
-    system: flashcardInstructions(cardCountInstruction(cardTarget)),
+    system: flashcardInstructions(cardCountInstruction(cardTarget), {
+      filename: options?.filename,
+      sourceType: options?.sourceType,
+      textSample: text.slice(0, 1200),
+    }),
     user: [
       `Analyze these ${sourceLabel}${fileHint} and turn them into key-point review flashcards.`,
       '',
@@ -478,7 +503,12 @@ export async function buildFlashcardsFromTutorReply(input: {
         'Convert the tutor answer into exam-review flashcards.',
         'Do NOT write quiz questions. Titles must be concept names.',
         'Each card needs title + a BULLETED explanation (4–7 lines starting with "• "; never one paragraph).',
-        'ALWAYS include one bullet that starts with "Example: " giving a concrete case or mini application.',
+        'ALWAYS include one bullet that starts with "Example: " matched to the subject domain.',
+        exampleStyleInstruction({
+          subject: input.subject,
+          filename: input.subject,
+          textSample: reply.slice(0, 1200),
+        }),
         'Title must be the most important concept name (2–6 words), never a truncated sentence starter.',
         'Use ONLY the academic content. Ignore any meta about missing flashcards, AI errors, tips, or app features.',
         'Do not mention chat, tutors, or that this came from an AI reply.',

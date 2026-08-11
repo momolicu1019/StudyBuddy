@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from app.card_counts import estimate_card_count
+from app.card_counts import estimate_card_count, is_situational_material
 from app.database import load_data, save_data
 from app.schemas import (
     DraftFlashcard,
@@ -20,16 +20,27 @@ from app.schemas import (
 
 router = APIRouter()
 
-# Reusable study-style examples used when the cloud API builds draft cards.
-_EXAMPLE_SNIPPETS = [
+# Domain-matched study examples for cloud draft cards.
+_GENERAL_EXAMPLES = [
     "If a plant sits in sunlight, sugar builds up in the leaves while oxygen is released.",
     "For a right triangle with legs 3 and 4, the hypotenuse is 5 because 3² + 4² = 5².",
     "Water freezing at 0°C is a physical change — the formula stays H₂O.",
     "In 2x + 6 = 14, subtract 6 then divide by 2 to get x = 4.",
     "A cell with damaged mitochondria makes far less ATP and tires quickly.",
-    "Saying “the mitochondria is the powerhouse of the cell” recalls energy production.",
     "Pushing a stalled car uses Newton’s second law: more force → more acceleration.",
     "Evaporation after rain cools skin because liquid water absorbs heat to become vapor.",
+    "If ice melts in a closed bottle, mass stays the same even though the state changes.",
+]
+
+_SITUATIONAL_EXAMPLES = [
+    "If a landlord enters a rented apartment without notice, the tenant may claim breach of quiet enjoyment.",
+    "When a shopper slips on an unmarked wet floor, the store may be liable under premises negligence.",
+    "If A offers to sell a bike for $100 and B says “I accept,” a binding contract can form.",
+    "When police question a suspect in custody without Miranda warnings, statements may be suppressed.",
+    "If a driver runs a red light and hits a pedestrian, duty and breach support a negligence claim.",
+    "When an employee is fired for reporting illegal conduct, whistleblower protections may apply.",
+    "If a roommate keeps a deposit after no damage is found, the departing tenant can seek return of the funds.",
+    "When a company uses a customer’s photo in an ad without consent, a privacy or publicity claim may arise.",
 ]
 
 
@@ -54,15 +65,22 @@ def _build_draft_cards(
 ) -> list[DraftFlashcard]:
     stem = Path(filename).stem.replace("_", " ").replace("-", " ").strip() or "your notes"
     count = estimate_card_count(source_type, file_bytes, filename=filename)
+    situational = is_situational_material(stem, filename, source_type)
+    examples = _SITUATIONAL_EXAMPLES if situational else _GENERAL_EXAMPLES
     cards: list[DraftFlashcard] = []
     for i in range(count):
-        example = _EXAMPLE_SNIPPETS[i % len(_EXAMPLE_SNIPPETS)]
+        example = examples[i % len(examples)]
+        how_it_works = (
+            "connect this rule to parties, duties, rights, or defenses in the material."
+            if situational
+            else "connect this idea to the surrounding steps or facts in the material."
+        )
         cards.append(
             DraftFlashcard(
                 question=f"Key idea {i + 1} from {stem}",
                 answer=(
                     f"• Definition: core point #{i + 1} from your {source_type} notes in “{stem}”.\n"
-                    f"• How it works: connect this idea to the surrounding steps or facts in the material.\n"
+                    f"• How it works: {how_it_works}\n"
                     f"• Example: {example}\n"
                     f"• Why it matters: this is a likely exam target from “{stem}”."
                 ),

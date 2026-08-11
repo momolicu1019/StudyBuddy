@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#6C63FF">
+<title>Study Buddy AI — Smart Review Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,500&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --primary:#6C63FF;
+  --primary2:#8B83FF;
+  --primary-dark:#574FF0;
+  --ink:#20243A;
+  --muted:#73778F;
+  --bg:#F7F7FC;
+  --card:#FFFFFF;
+  --line:#E9E9F2;
+  --success:#39B77A;
+  --success-soft:#E8F8F0;
+  --warning:#FFB84D;
+  --warning-soft:#FFF6E8;
+  --danger:#D84A62;
+  --danger-soft:#FFF0F2;
+  --soft:#F0EFFF;
+  --icon:#EEEDFF;
+  --shadow:0 10px 30px rgba(37,35,77,.08);
+  --phone-w:390px;
+  --phone-h:844px;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  min-height:100vh;
+  color:var(--ink);
+  font-family:"DM Sans",system-ui,sans-serif;
+  background:
+    radial-gradient(ellipse 80% 50% at 10% 0%, rgba(108,99,255,.12), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 90% 10%, rgba(57,183,122,.08), transparent 50%),
+    linear-gradient(180deg, #EEEDF8 0%, #E4E3F0 100%);
+}
+button,input{font:inherit}
+button{border:0;cursor:pointer}
+.page{
+  width:min(1180px,100%);
+  margin:0 auto;
+  padding:36px 20px 64px;
+  display:grid;
+  grid-template-columns:1.05fr .95fr;
+  gap:40px;
+  align-items:start;
+}
+.brief h1{
+  font-family:Fraunces,Georgia,serif;
+  font-size:clamp(32px,4vw,44px);
+  line-height:1.08;
+  letter-spacing:-.02em;
+  margin:0 0 10px;
+}
+.brief .eyebrow{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:var(--primary);
+  margin-bottom:14px;
+}
+.brief .eyebrow span{
+  width:8px;height:8px;border-radius:50%;background:var(--primary);
+  animation:pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.85)}}
+.brief .lede{color:var(--muted);font-size:16px;line-height:1.55;margin:0 0 28px;max-width:46ch}
+.brief h2{font-size:15px;margin:0 0 12px;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
+.gap-list{display:grid;gap:10px;margin:0 0 28px;padding:0;list-style:none}
+.gap-list li{
+  background:rgba(255,255,255,.72);
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px 16px;
+  display:grid;
+  grid-template-columns:auto 1fr;
+  gap:12px;
+  align-items:start;
+  backdrop-filter:blur(8px);
+}
+.gap-list .tag{
+  font-size:11px;font-weight:800;padding:5px 8px;border-radius:8px;
+  background:var(--soft);color:var(--primary);white-space:nowrap;
+}
+.gap-list strong{display:block;font-size:14px;margin-bottom:2px}
+.gap-list p{margin:0;font-size:13px;color:var(--muted);line-height:1.45}
+.proposal{
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:20px;
+  padding:20px;
+  box-shadow:var(--shadow);
+}
+.proposal h3{margin:0 0 6px;font-family:Fraunces,Georgia,serif;font-size:22px}
+.proposal p{margin:0 0 14px;color:var(--muted);font-size:14px;line-height:1.5}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{
+  font-size:12px;font-weight:700;padding:8px 12px;border-radius:999px;
+  background:var(--soft);color:var(--primary);
+}
+.chip.on{background:var(--primary);color:#fff}
+.hint{margin-top:18px;font-size:13px;color:var(--muted)}
+.hint kbd{
+  display:inline-block;padding:2px 7px;border-radius:6px;
+  background:#fff;border:1px solid var(--line);font-size:11px;font-weight:700;color:var(--ink);
+}
+
+/* Phone frame */
+.stage{display:flex;flex-direction:column;align-items:center;gap:16px;position:sticky;top:24px}
+.phone{
+  width:var(--phone-w);
+  height:var(--phone-h);
+  background:var(--bg);
+  border-radius:42px;
+  border:10px solid #1a1c2c;
+  box-shadow:
+    0 0 0 2px #2e3148,
+    0 30px 80px rgba(24,25,43,.28);
+  overflow:hidden;
+  position:relative;
+  display:flex;
+  flex-direction:column;
+}
+.notch{
+  position:absolute;top:10px;left:50%;transform:translateX(-50%);
+  width:120px;height:28px;background:#1a1c2c;border-radius:0 0 16px 16px;z-index:5;
+}
+.screen{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative}
+.view{display:none;flex:1;flex-direction:column;overflow:hidden;animation:fadeIn .28s ease}
+.view.active{display:flex}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+.topbar{
+  height:64px;padding:28px 18px 0;background:#fff;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;
+}
+.brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:16px}
+.logo{
+  width:32px;height:32px;border-radius:10px;
+  background:linear-gradient(135deg,var(--primary),#9C7CFF);
+  display:grid;place-items:center;color:#fff;font-size:15px;
+}
+.avatar{
+  width:34px;height:34px;border-radius:50%;background:var(--soft);
+  display:grid;place-items:center;color:var(--primary);font-weight:800;font-size:13px;
+}
+.scroll{flex:1;overflow:auto;padding:16px 16px 12px;-webkit-overflow-scrolling:touch}
+.scroll::-webkit-scrollbar{width:0}
+
+.greeting{margin:0 0 4px;font-size:13px;color:var(--muted);font-weight:600}
+.greeting b{color:var(--ink)}
+.title{
+  font-family:Fraunces,Georgia,serif;
+  font-size:28px;margin:0 0 6px;letter-spacing:-.02em;line-height:1.15;
+}
+.sub{margin:0 0 18px;color:var(--muted);font-size:14px;line-height:1.45}
+
+.streak-row{
+  display:grid;grid-template-columns:1.2fr 1fr;gap:10px;margin-bottom:14px;
+}
+.stat-card{
+  background:#fff;border:1px solid var(--line);border-radius:18px;padding:14px;
+  box-shadow:var(--shadow);
+}
+.stat-card .label{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.stat-card .value{font-size:26px;font-weight:800;margin-top:4px;letter-spacing:-.02em}
+.stat-card .meta{font-size:12px;color:var(--muted);margin-top:2px}
+.fire{color:#E67E22}
+
+.goal{
+  background:linear-gradient(145deg,#fff,#F8F7FF);
+  border:1px solid var(--line);
+  border-radius:18px;
+  padding:16px;
+  margin-bottom:16px;
+  box-shadow:var(--shadow);
+}
+.goal-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.goal-head strong{font-size:14px}
+.goal-head span{font-size:12px;font-weight:700;color:var(--primary)}
+.bar{height:10px;background:var(--icon);border-radius:999px;overflow:hidden}
+.bar > i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--primary),var(--primary2));border-radius:999px;transition:width .6s ease}
+.goal-note{margin:10px 0 0;font-size:12px;color:var(--muted)}
+
+.cta{
+  display:flex;align-items:center;gap:14px;
+  background:linear-gradient(135deg,var(--primary),#857DFF);
+  color:#fff;border-radius:20px;padding:16px;margin-bottom:18px;
+  box-shadow:0 14px 28px rgba(108,99,255,.28);
+  text-align:left;width:100%;
+  transition:transform .15s ease;
+}
+.cta:active{transform:scale(.98)}
+.cta-icon{
+  width:48px;height:48px;border-radius:16px;flex:0 0 48px;
+  background:rgba(255,255,255,.18);display:grid;place-items:center;font-size:22px;
+}
+.cta h3{margin:0 0 3px;font-size:17px}
+.cta p{margin:0;font-size:12px;opacity:.88;line-height:1.35}
+.cta .arrow{margin-left:auto;font-size:22px;opacity:.7}
+
+.section-label{
+  display:flex;align-items:center;justify-content:space-between;
+  margin:4px 0 10px;font-size:13px;font-weight:800;color:var(--ink);
+}
+.section-label span{font-weight:700;color:var(--muted);font-size:12px}
+
+.due-list{display:grid;gap:10px;margin-bottom:18px}
+.due{
+  background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px;
+  display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;
+  box-shadow:var(--shadow);
+}
+.due-icon{
+  width:42px;height:42px;border-radius:13px;background:var(--icon);
+  display:grid;place-items:center;font-size:20px;
+}
+.due h4{margin:0 0 2px;font-size:14px}
+.due p{margin:0;font-size:12px;color:var(--muted)}
+.badge{
+  font-size:11px;font-weight:800;padding:6px 9px;border-radius:999px;
+  background:var(--warning-soft);color:#A66B12;
+}
+.badge.hot{background:var(--danger-soft);color:var(--danger)}
+.badge.ok{background:var(--success-soft);color:#1F7A4D}
+
+.weak{
+  background:#fff;border:1px solid var(--line);border-radius:18px;padding:14px;
+  box-shadow:var(--shadow);margin-bottom:12px;
+}
+.weak-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.weak-row strong{font-size:13px}
+.weak-row span{font-size:11px;font-weight:700;color:var(--danger)}
+.mini-bar{height:6px;background:#F3F2FA;border-radius:999px;overflow:hidden}
+.mini-bar > i{display:block;height:100%;background:linear-gradient(90deg,#D84A62,#FFB84D);border-radius:999px}
+
+.tabs{
+  height:68px;background:#fff;border-top:1px solid var(--line);
+  display:grid;grid-template-columns:repeat(5,1fr);padding:8px 6px 10px;flex-shrink:0;
+}
+.tab{
+  background:transparent;color:var(--muted);border-radius:14px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  font-size:10px;font-weight:700;
+}
+.tab .ico{font-size:18px;line-height:1}
+.tab.active{background:var(--soft);color:var(--primary)}
+
+/* Study session */
+.study-top{
+  padding:28px 16px 12px;background:#fff;border-bottom:1px solid var(--line);flex-shrink:0;
+}
+.study-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.back{
+  width:36px;height:36px;border-radius:11px;background:#F2F1F8;color:var(--muted);
+  display:grid;place-items:center;font-size:18px;font-weight:700;
+}
+.study-nav strong{font-size:14px}
+.progress-label{font-size:12px;font-weight:700;color:var(--muted)}
+.study-bar{height:6px;background:var(--icon);border-radius:999px;overflow:hidden}
+.study-bar > i{display:block;height:100%;background:var(--primary);border-radius:999px;transition:width .35s ease}
+
+.study-body{
+  flex:1;display:flex;flex-direction:column;padding:18px 16px 12px;overflow:auto;
+}
+.card-stage{
+  flex:1;display:flex;align-items:center;justify-content:center;perspective:1000px;min-height:280px;
+}
+.flip-card{
+  width:100%;height:300px;position:relative;transform-style:preserve-3d;
+  transition:transform .45s ease;cursor:pointer;
+}
+.flip-card.flipped{transform:rotateY(180deg)}
+.face{
+  position:absolute;inset:0;backface-visibility:hidden;
+  background:#fff;border:1px solid var(--line);border-radius:22px;
+  box-shadow:var(--shadow);padding:22px;display:flex;flex-direction:column;
+}
+.face.back{transform:rotateY(180deg);background:linear-gradient(160deg,#fff,#F8F7FF)}
+.face .kind{
+  font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--primary);margin-bottom:12px;
+}
+.face h2{
+  font-family:Fraunces,Georgia,serif;font-size:22px;margin:0 0 12px;line-height:1.25;letter-spacing:-.01em;
+}
+.face .body{color:var(--muted);font-size:14px;line-height:1.55;margin:0}
+.face .tap{margin-top:auto;font-size:12px;font-weight:700;color:var(--muted);text-align:center}
+
+.rating{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:16px;
+  opacity:0;pointer-events:none;transform:translateY(8px);transition:.25s ease;
+}
+.rating.show{opacity:1;pointer-events:auto;transform:none}
+.rate{
+  padding:12px 6px;border-radius:14px;font-weight:800;font-size:12px;
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+}
+.rate small{font-size:10px;font-weight:650;opacity:.75}
+.rate.again{background:var(--danger-soft);color:var(--danger)}
+.rate.hard{background:var(--warning-soft);color:#A66B12}
+.rate.good{background:var(--soft);color:var(--primary)}
+.rate.easy{background:var(--success-soft);color:#1F7A4D}
+
+.session-done{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:24px;gap:8px;
+}
+.session-done .big{
+  width:72px;height:72px;border-radius:22px;background:var(--success-soft);
+  display:grid;place-items:center;font-size:34px;margin-bottom:8px;
+}
+.session-done h2{font-family:Fraunces,Georgia,serif;margin:0;font-size:28px}
+.session-done p{margin:0;color:var(--muted);font-size:14px;line-height:1.5;max-width:28ch}
+.primary-btn{
+  margin-top:18px;width:100%;max-width:260px;padding:14px;
+  background:var(--primary);color:#fff;border-radius:14px;font-weight:800;
+}
+.primary-btn:hover{background:var(--primary-dark)}
+.stats-mini{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:100%;margin-top:18px}
+.stats-mini div{
+  background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 8px;
+}
+.stats-mini b{display:block;font-size:18px}
+.stats-mini span{font-size:10px;color:var(--muted);font-weight:700}
+
+.toast{
+  position:absolute;left:50%;bottom:84px;transform:translateX(-50%) translateY(20px);
+  background:#20243A;color:#fff;padding:10px 14px;border-radius:12px;
+  font-size:12px;font-weight:700;opacity:0;pointer-events:none;transition:.25s;z-index:8;
+  white-space:nowrap;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+.stage-caption{
+  font-size:13px;color:var(--muted);text-align:center;max-width:36ch;line-height:1.45;
+}
+.stage-caption strong{color:var(--ink)}
+
+@media(max-width:960px){
+  .page{grid-template-columns:1fr;padding:24px 14px 48px}
+  .stage{position:static}
+  .brief{order:1}.stage{order:2}
+}
+@media(max-width:420px){
+  .phone{width:100%;height:min(780px,92vh);border-radius:28px;border-width:8px}
+}
+</style>
+</head>
+<body>
+  <div class="page">
+    <aside class="brief">
+      <div class="eyebrow"><span></span> Enhancement proposal</div>
+      <h1>Smart Review — make study stick</h1>
+      <p class="lede">
+        Study Buddy already turns notes into flashcards. The biggest leap is helping students
+        <strong>know what to study next</strong> and <strong>remember it longer</strong> —
+        without adding dashboard clutter.
+      </p>
+
+      <h2>Top opportunities</h2>
+      <ul class="gap-list">
+        <li>
+          <span class="tag">High</span>
+          <div>
+            <strong>Spaced repetition + due queue</strong>
+            <p>Cards are binary “mastered.” Real retention needs Again / Hard / Good / Easy scheduling and a “due today” list.</p>
+          </div>
+        </li>
+        <li>
+          <span class="tag">High</span>
+          <div>
+            <strong>Daily goal &amp; streak (data already exists)</strong>
+            <p><code>daily_goal_minutes</code> sits in settings with almost no UI. Surface a Today plan and streak on Home.</p>
+          </div>
+        </li>
+        <li>
+          <span class="tag">Med</span>
+          <div>
+            <strong>Weak-subject coaching</strong>
+            <p>Quiz misses and unmastered cards can drive a short “needs work” strip — then jump into a focused deck.</p>
+          </div>
+        </li>
+        <li>
+          <span class="tag">Med</span>
+          <div>
+            <strong>Deadlines + Focus polish</strong>
+            <p>Deadlines are buried; Pomodoro promises a break but only runs focus. Promote deadlines and finish the timer loop.</p>
+          </div>
+        </li>
+        <li>
+          <span class="tag">Later</span>
+          <div>
+            <strong>Real sync &amp; docs cleanup</strong>
+            <p>Email auth is local/demo; FastAPI is unused; README still describes Google Drive. Align product story with code.</p>
+          </div>
+        </li>
+      </ul>
+
+      <div class="proposal">
+        <h3>Sample: Today + Smart Review</h3>
+        <p>
+          One new Home composition: streak, daily goal, due queue, weak folders —
+          and a review session with confidence ratings instead of “flip = mastered.”
+        </p>
+        <div class="chips">
+          <span class="chip on">Prototype</span>
+          <span class="chip">No app code yet</span>
+          <span class="chip">Matches existing palette</span>
+        </div>
+        <p class="hint">Tap <kbd>Start Smart Review</kbd> in the phone, flip the card, then rate it.</p>
+      </div>
+    </aside>
+
+    <div class="stage">
+      <div class="phone" aria-label="Study Buddy Smart Review prototype">
+        <div class="notch" aria-hidden="true"></div>
+        <div class="screen">
+          <!-- TODAY -->
+          <section class="view active" id="view-today" aria-label="Today">
+            <header class="topbar">
+              <div class="brand"><div class="logo">📚</div>Study Buddy</div>
+              <div class="avatar">N</div>
+            </header>
+            <div class="scroll">
+              <p class="greeting">Good evening, <b>Nino</b></p>
+              <h1 class="title">Today’s plan</h1>
+              <p class="sub">12 cards are due. Hit your 25‑min goal and keep the streak alive.</p>
+
+              <div class="streak-row">
+                <div class="stat-card">
+                  <div class="label">Streak</div>
+                  <div class="value fire">7 🔥</div>
+                  <div class="meta">Best: 14 days</div>
+                </div>
+                <div class="stat-card">
+                  <div class="label">Due now</div>
+                  <div class="value">12</div>
+                  <div class="meta">across 3 folders</div>
+                </div>
+              </div>
+
+              <div class="goal">
+                <div class="goal-head">
+                  <strong>Daily focus goal</strong>
+                  <span id="goal-text">8 / 25 min</span>
+                </div>
+                <div class="bar"><i id="goal-bar" style="width:32%"></i></div>
+                <p class="goal-note">Finish Smart Review (~10 min) to stay on track.</p>
+              </div>
+
+              <button class="cta" id="start-review" type="button">
+                <div class="cta-icon">⚡</div>
+                <div>
+                  <h3>Start Smart Review</h3>
+                  <p>Spaced queue · Biology + Chem first</p>
+                </div>
+                <span class="arrow">›</span>
+              </button>
+
+              <div class="section-label">Due today <span>priority order</span></div>
+              <div class="due-list">
+                <div class="due">
+                  <div class="due-icon">🧬</div>
+                  <div>
+                    <h4>Cell Biology</h4>
+                    <p>5 cards · last seen 3 days ago</p>
+                  </div>
+                  <span class="badge hot">Overdue</span>
+                </div>
+                <div class="due">
+                  <div class="due-icon">🔬</div>
+                  <div>
+                    <h4>Organic Chem</h4>
+                    <p>4 cards · quiz score 58%</p>
+                  </div>
+                  <span class="badge">Due</span>
+                </div>
+                <div class="due">
+                  <div class="due-icon">➗</div>
+                  <div>
+                    <h4>Calculus II</h4>
+                    <p>3 cards · new this week</p>
+                  </div>
+                  <span class="badge ok">Light</span>
+                </div>
+              </div>
+
+              <div class="section-label">Needs work <span>from quizzes</span></div>
+              <div class="weak">
+                <div class="weak-row">
+                  <strong>🔬 Reaction mechanisms</strong>
+                  <span>42% retention</span>
+                </div>
+                <div class="mini-bar"><i style="width:42%"></i></div>
+              </div>
+              <div class="weak">
+                <div class="weak-row">
+                  <strong>🧬 Mitosis stages</strong>
+                  <span>61% retention</span>
+                </div>
+                <div class="mini-bar"><i style="width:61%"></i></div>
+              </div>
+            </div>
+            <nav class="tabs" aria-label="Main tabs">
+              <button class="tab active" type="button"><span class="ico">⌂</span>Today</button>
+              <button class="tab" type="button"><span class="ico">▤</span>Cards</button>
+              <button class="tab" type="button"><span class="ico">◎</span>Quiz</button>
+              <button class="tab" type="button"><span class="ico">✦</span>Tutor</button>
+              <button class="tab" type="button"><span class="ico">◷</span>Focus</button>
+            </nav>
+          </section>
+
+          <!-- REVIEW -->
+          <section class="view" id="view-review" aria-label="Smart Review session">
+            <div class="study-top">
+              <div class="study-nav">
+                <button class="back" id="back-today" type="button" aria-label="Back">‹</button>
+                <strong>Smart Review</strong>
+                <span class="progress-label"><span id="card-pos">1</span>/5</span>
+              </div>
+              <div class="study-bar"><i id="session-bar" style="width:20%"></i></div>
+            </div>
+            <div class="study-body" id="study-active">
+              <div class="card-stage">
+                <div class="flip-card" id="flip-card" role="button" tabindex="0" aria-label="Flip card">
+                  <div class="face front">
+                    <div class="kind">Key point · Cell Biology</div>
+                    <h2 id="q-text">What happens during metaphase?</h2>
+                    <p class="body" id="q-hint">Tap to reveal the explanation.</p>
+                    <div class="tap">Tap to flip</div>
+                  </div>
+                  <div class="face back">
+                    <div class="kind">Explanation</div>
+                    <h2 id="a-title">Chromosomes align</h2>
+                    <p class="body" id="a-text">Sister chromatids line up at the metaphase plate so each daughter cell gets one copy.</p>
+                    <div class="tap">How well did you know this?</div>
+                  </div>
+                </div>
+              </div>
+              <div class="rating" id="rating">
+                <button class="rate again" type="button" data-rate="again">Again<small>&lt;1m</small></button>
+                <button class="rate hard" type="button" data-rate="hard">Hard<small>10m</small></button>
+                <button class="rate good" type="button" data-rate="good">Good<small>1d</small></button>
+                <button class="rate easy" type="button" data-rate="easy">Easy<small>4d</small></button>
+              </div>
+            </div>
+            <div class="session-done" id="study-done" hidden>
+              <div class="big">✓</div>
+              <h2>Session clear</h2>
+              <p>5 cards reviewed. Goal progress bumped — streak stays at 7.</p>
+              <div class="stats-mini">
+                <div><b id="stat-again">0</b><span>Again</span></div>
+                <div><b id="stat-good">0</b><span>Good+</span></div>
+                <div><b id="stat-min">+10</b><span>Minutes</span></div>
+              </div>
+              <button class="primary-btn" id="done-home" type="button">Back to Today</button>
+            </div>
+          </section>
+
+          <div class="toast" id="toast" role="status"></div>
+        </div>
+      </div>
+      <p class="stage-caption">
+        Interactive sample — <strong>not wired into the Expo app yet</strong>.
+        Open this HTML file in a browser to click through the flow.
+      </p>
+    </div>
+  </div>
+
+<script>
+const cards = [
+  {
+    folder: "Cell Biology",
+    q: "What happens during metaphase?",
+    hint: "Think about where the chromosomes move.",
+    title: "Chromosomes align",
+    a: "Sister chromatids line up at the metaphase plate so each daughter cell gets one copy."
+  },
+  {
+    folder: "Organic Chem",
+    q: "What does an SN1 reaction need first?",
+    hint: "Rate-determining step.",
+    title: "Carbocation forms",
+    a: "The leaving group departs first, forming a carbocation intermediate before the nucleophile attacks."
+  },
+  {
+    folder: "Cell Biology",
+    q: "Role of the Golgi apparatus?",
+    hint: "Post-office analogy.",
+    title: "Sort & ship proteins",
+    a: "Modifies, packages, and routes proteins and lipids from the ER to their destinations."
+  },
+  {
+    folder: "Calculus II",
+    q: "Integration by parts formula?",
+    hint: "Product rule in reverse.",
+    title: "∫ u dv = uv − ∫ v du",
+    a: "Choose u to simplify when differentiated; dv should be easy to integrate."
+  },
+  {
+    folder: "Organic Chem",
+    q: "Why are tertiary carbocations more stable?",
+    hint: "Hyperconjugation / induction.",
+    title: "Alkyl groups donate electron density",
+    a: "More alkyl substituents stabilize the positive charge via hyperconjugation and inductive effects."
+  }
+];
+
+let index = 0;
+let flipped = false;
+const counts = { again: 0, hard: 0, good: 0, easy: 0 };
+
+const viewToday = document.getElementById("view-today");
+const viewReview = document.getElementById("view-review");
+const flipCard = document.getElementById("flip-card");
+const rating = document.getElementById("rating");
+const studyActive = document.getElementById("study-active");
+const studyDone = document.getElementById("study-done");
+const toast = document.getElementById("toast");
+
+function showToast(msg){
+  toast.textContent = msg;
+  toast.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove("show"), 1600);
+}
+
+function showView(which){
+  viewToday.classList.toggle("active", which === "today");
+  viewReview.classList.toggle("active", which === "review");
+}
+
+function renderCard(){
+  const c = cards[index];
+  flipped = false;
+  flipCard.classList.remove("flipped");
+  rating.classList.remove("show");
+  document.getElementById("q-text").textContent = c.q;
+  document.getElementById("q-hint").textContent = c.hint;
+  document.getElementById("a-title").textContent = c.title;
+  document.getElementById("a-text").textContent = c.a;
+  flipCard.querySelector(".front .kind").textContent = "Key point · " + c.folder;
+  document.getElementById("card-pos").textContent = String(index + 1);
+  document.getElementById("session-bar").style.width = ((index) / cards.length * 100) + "%";
+}
+
+function flip(){
+  if (studyDone.hidden === false) return;
+  flipped = !flipped;
+  flipCard.classList.toggle("flipped", flipped);
+  rating.classList.toggle("show", flipped);
+}
+
+function rate(kind){
+  counts[kind] = (counts[kind] || 0) + 1;
+  const labels = {
+    again: "Again · back in under a minute",
+    hard: "Hard · see you in 10 minutes",
+    good: "Good · scheduled for tomorrow",
+    easy: "Easy · spaced out 4 days"
+  };
+  showToast(labels[kind]);
+  index += 1;
+  if (index >= cards.length){
+    finishSession();
+    return;
+  }
+  setTimeout(renderCard, 220);
+}
+
+function finishSession(){
+  studyActive.hidden = true;
+  studyDone.hidden = false;
+  document.getElementById("session-bar").style.width = "100%";
+  document.getElementById("stat-again").textContent = String(counts.again);
+  document.getElementById("stat-good").textContent = String(counts.good + counts.easy);
+  document.getElementById("goal-bar").style.width = "72%";
+  document.getElementById("goal-text").textContent = "18 / 25 min";
+}
+
+function resetSession(){
+  index = 0;
+  counts.again = counts.hard = counts.good = counts.easy = 0;
+  studyActive.hidden = false;
+  studyDone.hidden = true;
+  renderCard();
+}
+
+document.getElementById("start-review").addEventListener("click", () => {
+  resetSession();
+  showView("review");
+});
+document.getElementById("back-today").addEventListener("click", () => showView("today"));
+document.getElementById("done-home").addEventListener("click", () => showView("today"));
+flipCard.addEventListener("click", flip);
+flipCard.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); }
+});
+rating.querySelectorAll("[data-rate]").forEach((btn) => {
+  btn.addEventListener("click", () => rate(btn.dataset.rate));
+});
+
+renderCard();
+</script>
+</body>
+</html>

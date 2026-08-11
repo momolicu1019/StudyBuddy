@@ -25,7 +25,12 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
-import { needsDeadlineBulb } from '../storage/deadlineUtils';
+import {
+  getNearestNearingUrgency,
+  needsDeadlineBulb,
+  urgencyTone,
+  type NearingUrgency,
+} from '../storage/deadlineUtils';
 import {
   DOCUMENT_PICKER_TYPES,
   detectSourceKind,
@@ -72,6 +77,8 @@ export function DashboardScreen() {
   const [folderName, setFolderName] = useState('');
   const [folderIcon, setFolderIcon] = useState('📚');
   const [deadlineBulb, setDeadlineBulb] = useState(false);
+  const [deadlineSectionUrgency, setDeadlineSectionUrgency] =
+    useState<NearingUrgency | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -79,9 +86,15 @@ export function DashboardScreen() {
       void (async () => {
         try {
           const deadlines = await api.getDeadlines();
-          if (active) setDeadlineBulb(needsDeadlineBulb(deadlines));
+          if (active) {
+            setDeadlineBulb(needsDeadlineBulb(deadlines));
+            setDeadlineSectionUrgency(getNearestNearingUrgency(deadlines));
+          }
         } catch {
-          if (active) setDeadlineBulb(false);
+          if (active) {
+            setDeadlineBulb(false);
+            setDeadlineSectionUrgency(null);
+          }
         }
       })();
       return () => {
@@ -320,6 +333,7 @@ export function DashboardScreen() {
               desc: 'Browse subjects, study cards, and manage folders.',
               onPress: () => navigation.navigate('Flashcards'),
               showBulb: false,
+              highlight: null as NearingUrgency | null,
             },
             {
               icon: '🧠',
@@ -327,6 +341,7 @@ export function DashboardScreen() {
               desc: 'Test what you know and track your score.',
               onPress: () => navigation.navigate('Quiz', {}),
               showBulb: false,
+              highlight: null as NearingUrgency | null,
             },
             {
               icon: '📅',
@@ -334,6 +349,7 @@ export function DashboardScreen() {
               desc: 'Create due dates and track what is coming up.',
               onPress: () => navigation.navigate('Deadlines'),
               showBulb: deadlineBulb,
+              highlight: deadlineSectionUrgency,
             },
             {
               icon: '✨',
@@ -341,27 +357,44 @@ export function DashboardScreen() {
               desc: 'Ask questions and get step-by-step help.',
               onPress: () => navigation.navigate('AITutor', {}),
               showBulb: false,
+              highlight: null as NearingUrgency | null,
             },
-          ].map((tile) => (
-            <Pressable key={tile.title} style={styles.tile} onPress={tile.onPress}>
-              <IconBubble size={54}>{tile.icon}</IconBubble>
-              <View style={{ flex: 1 }}>
-                <View style={styles.tileTitleRow}>
-                  <Text style={styles.tileTitle}>{tile.title}</Text>
-                  {tile.showBulb ? (
-                    <Text
-                      style={styles.tileBulb}
-                      accessibilityLabel="Upcoming deadline reminder"
-                    >
-                      💡
-                    </Text>
-                  ) : null}
+          ].map((tile) => {
+            const tone = tile.highlight ? urgencyTone(tile.highlight) : null;
+            return (
+              <Pressable
+                key={tile.title}
+                style={[
+                  styles.tile,
+                  tone
+                    ? {
+                        borderColor: tone.border,
+                        backgroundColor: tone.background,
+                        borderWidth: 2,
+                      }
+                    : null,
+                ]}
+                onPress={tile.onPress}
+              >
+                <IconBubble size={54}>{tile.icon}</IconBubble>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.tileTitleRow}>
+                    <Text style={styles.tileTitle}>{tile.title}</Text>
+                    {tile.showBulb ? (
+                      <Text
+                        style={styles.tileBulb}
+                        accessibilityLabel="Upcoming deadline reminder"
+                      >
+                        💡
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.sub}>{tile.desc}</Text>
                 </View>
-                <Text style={styles.sub}>{tile.desc}</Text>
-              </View>
-              <Text style={styles.chevron}>›</Text>
-            </Pressable>
-          ))}
+                <Text style={styles.chevron}>›</Text>
+              </Pressable>
+            );
+          })}
         </View>
 
         <Text style={[styles.h2, { marginTop: 8, marginBottom: 14 }]}>

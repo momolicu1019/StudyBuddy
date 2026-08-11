@@ -17,7 +17,10 @@ export {
   daysUntilDue,
   formatDueDate,
   getDeadlineUrgency,
+  getNearestNearingUrgency,
   needsDeadlineBulb,
   sortDeadlines,
   toIsoDate,
+  urgencyTone,
 } from './deadlineUtils';
+export type { DeadlineUrgency, NearingUrgency, UrgencyTone } from './deadlineUtils';

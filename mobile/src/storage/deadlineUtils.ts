@@ -1,6 +1,14 @@
 import type { Deadline } from './schema';
+import { colors } from '../theme/colors';
 
 export type DeadlineUrgency = 'far' | 'week' | 'urgent';
+export type NearingUrgency = Exclude<DeadlineUrgency, 'far'>;
+
+export type UrgencyTone = {
+  border: string;
+  background: string;
+  badge: string;
+};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -73,6 +81,54 @@ export function needsDeadlineBulb(
   return deadlines.some(
     (item) => !item.completed && daysUntilDue(item.due_date, now) <= 1,
   );
+}
+
+/**
+ * Among incomplete deadlines that are amber (within a week) or red (≤1 day),
+ * return the urgency of the nearest one. Null when nothing is nearing.
+ */
+export function getNearestNearingUrgency(
+  deadlines: Deadline[],
+  now = new Date(),
+): NearingUrgency | null {
+  let nearestDays: number | null = null;
+  let nearestUrgency: NearingUrgency | null = null;
+
+  for (const item of deadlines) {
+    if (item.completed) continue;
+    const days = daysUntilDue(item.due_date, now);
+    if (days > 7) continue;
+    const urgency: NearingUrgency = days > 1 ? 'week' : 'urgent';
+    if (nearestDays === null || days < nearestDays) {
+      nearestDays = days;
+      nearestUrgency = urgency;
+    }
+  }
+
+  return nearestUrgency;
+}
+
+/** Border / soft fill / badge colors for a deadline urgency level. */
+export function urgencyTone(urgency: DeadlineUrgency): UrgencyTone {
+  if (urgency === 'far') {
+    return {
+      border: colors.success,
+      background: colors.successSoft,
+      badge: colors.success,
+    };
+  }
+  if (urgency === 'week') {
+    return {
+      border: colors.warning,
+      background: colors.warningSoft,
+      badge: '#C9841A',
+    };
+  }
+  return {
+    border: colors.danger,
+    background: colors.dangerSoft,
+    badge: colors.danger,
+  };
 }
 
 export function sortDeadlines(deadlines: Deadline[]): Deadline[] {

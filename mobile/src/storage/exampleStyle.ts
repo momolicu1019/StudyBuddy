@@ -16,11 +16,18 @@ export function exampleStyleInstruction(args: {
   filename?: string;
   sourceLabel?: string;
   subject?: string;
+  /** Optional note/OCR/reply snippet used to detect situational domains. */
+  textSample?: string;
   situational?: boolean;
 }): string {
   const situational =
     args.situational ??
-    isSituationalMaterial([args.filename, args.sourceLabel, args.subject]);
+    isSituationalMaterial([
+      args.filename,
+      args.sourceLabel,
+      args.subject,
+      args.textSample,
+    ]);
 
   if (situational) {
     return [

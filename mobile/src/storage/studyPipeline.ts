@@ -27,7 +27,7 @@ import {
   type SourceKind,
 } from './sourceMime';
 
-const MAX_INLINE_CHARS = 20_000_000; // ~15MB base64 budget guard
+const MAX_INLINE_CHARS = 40_000_000; // ~30MB base64 budget guard
 
 export type StudyAnalysis = {
   overview: string;

@@ -21,36 +21,15 @@ import {
   daysUntilDue,
   formatDueDate,
   getDeadlineUrgency,
+  getNearestNearingUrgency,
   needsDeadlineBulb,
   sortDeadlines,
   toIsoDate,
-  type DeadlineUrgency,
+  urgencyTone,
 } from '../storage/deadlineUtils';
 import { colors } from '../theme/colors';
 
 const WEEKDAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
-
-function urgencyStyles(urgency: DeadlineUrgency) {
-  if (urgency === 'far') {
-    return {
-      border: colors.success,
-      background: colors.successSoft,
-      badge: colors.success,
-    };
-  }
-  if (urgency === 'week') {
-    return {
-      border: colors.warning,
-      background: colors.warningSoft,
-      badge: '#C9841A',
-    };
-  }
-  return {
-    border: colors.danger,
-    background: colors.dangerSoft,
-    badge: colors.danger,
-  };
-}
 
 function CalendarPicker({
   value,
@@ -156,6 +135,8 @@ export function DeadlinesScreen() {
   );
 
   const showBulb = needsDeadlineBulb(deadlines);
+  const sectionUrgency = getNearestNearingUrgency(deadlines);
+  const sectionTone = sectionUrgency ? urgencyTone(sectionUrgency) : null;
   const pendingDelete = deadlines.find((d) => d.id === deleteId) ?? null;
 
   async function createDeadline() {
@@ -204,7 +185,18 @@ export function DeadlinesScreen() {
   return (
     <>
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-        <Card style={styles.hero}>
+        <Card
+          style={[
+            styles.hero,
+            sectionTone
+              ? {
+                  borderColor: sectionTone.border,
+                  backgroundColor: sectionTone.background,
+                  borderWidth: 2,
+                }
+              : undefined,
+          ]}
+        >
           <View style={styles.heroRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.h1}>Deadlines and Due Date</Text>
@@ -214,14 +206,27 @@ export function DeadlinesScreen() {
               </Text>
             </View>
             {showBulb ? (
-              <View style={styles.bulbBadge} accessibilityLabel="Deadline reminder">
+              <View
+                style={[
+                  styles.bulbBadge,
+                  sectionTone
+                    ? {
+                        backgroundColor: sectionTone.background,
+                        borderColor: sectionTone.border,
+                      }
+                    : null,
+                ]}
+                accessibilityLabel="Deadline reminder"
+              >
                 <Text style={styles.bulbText}>💡</Text>
               </View>
             ) : null}
           </View>
-          {showBulb ? (
-            <Text style={styles.bulbHint}>
-              You have a deadline due tomorrow or already past due.
+          {sectionTone ? (
+            <Text style={[styles.bulbHint, { color: sectionTone.badge }]}>
+              {sectionUrgency === 'urgent'
+                ? 'You have a deadline due tomorrow or already past due.'
+                : 'You have a deadline coming up within a week.'}
             </Text>
           ) : null}
           <PrimaryButton
@@ -242,7 +247,7 @@ export function DeadlinesScreen() {
             {deadlines.map((item) => {
               const days = daysUntilDue(item.due_date);
               const urgency = getDeadlineUrgency(item.due_date);
-              const tone = urgencyStyles(urgency);
+              const tone = urgencyTone(urgency);
               return (
                 <View
                   key={item.id}

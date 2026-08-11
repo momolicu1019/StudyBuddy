@@ -10,15 +10,17 @@ type Props = {
   onClose: () => void;
 };
 
-const APP_NAME = 'Study Buddy AI';
+const FALLBACK_APP_NAME = 'StudyBuddy';
+const FALLBACK_VERSION = '1.0.1';
 const DEVELOPER = 'Nino Jeffrey Montillano';
 const RIGHTS_DATE = '08/2026';
 
 export function AboutModal({ visible, onClose }: Props) {
+  const displayName = Constants.expoConfig?.name?.trim() || FALLBACK_APP_NAME;
   const version =
     Constants.expoConfig?.version ||
     Constants.nativeAppVersion ||
-    '1.0.0';
+    FALLBACK_VERSION;
 
   return (
     <AppModal visible={visible} onClose={onClose}>
@@ -30,11 +32,11 @@ export function AboutModal({ visible, onClose }: Props) {
             resizeMode="contain"
           />
         </View>
-        <Text style={styles.appName}>{APP_NAME}</Text>
+        <Text style={styles.appName}>{displayName}</Text>
       </View>
 
       <View style={styles.details}>
-        <DetailRow label="App Name" value={APP_NAME} />
+        <DetailRow label="App Name" value={displayName} />
         <DetailRow label="Version" value={version} />
         <DetailRow label="Developer" value={DEVELOPER} />
         <DetailRow label="All rights reserved" value={RIGHTS_DATE} />

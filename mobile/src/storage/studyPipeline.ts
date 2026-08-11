@@ -10,10 +10,10 @@ import {
 } from './cardCount';
 import { estimatePdfPagesFromBase64 } from './contentExtract';
 import {
-  formatExplanationAsBullets,
   isWeakKeyPointTitle,
   normalizeKeyPointTitle,
   sanitizeFlashcardText,
+  withExampleBullet,
 } from './explanationFormat';
 import { generateWithGemini } from './geminiClient';
 import {
@@ -65,8 +65,12 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-function toReviewCard(title: string, summary: string): DraftFlashcard | null {
-  const back = formatExplanationAsBullets(summary);
+function toReviewCard(
+  title: string,
+  summary: string,
+  example?: string,
+): DraftFlashcard | null {
+  const back = withExampleBullet(summary, example);
   if (back.length < 40) return null;
 
   const front = normalizeKeyPointTitle(title, back);
@@ -86,7 +90,6 @@ function buildExplanation(row: Record<string, unknown>): string {
     row.back,
     row.why_it_matters,
     row.whyItMatters,
-    row.example,
     row.formula,
   ]
     .map((v) => String(v ?? '').trim())
@@ -99,6 +102,10 @@ function buildExplanation(row: Record<string, unknown>): string {
     }
   }
   return unique.join('\n\n').trim();
+}
+
+function pickExample(row: Record<string, unknown>): string {
+  return String(row.example ?? row.example_text ?? row.worked_example ?? '').trim();
 }
 
 /**
@@ -166,7 +173,7 @@ function parseAnalysis(raw: string): StudyAnalysis {
         row.front ??
         '',
     ).trim();
-    const summary = buildExplanation(row);
+    const summary = withExampleBullet(buildExplanation(row), pickExample(row));
     if (!title || !summary) continue;
     keyPoints.push({ title, summary });
   }
@@ -194,7 +201,8 @@ function buildAnalyzePrompt(args: {
     '  "key_points": [',
     '    {',
     '      "title": "short complete concept name (2-6 words)",',
-    '      "explanation": "bullet list string (see rules)"',
+    '      "explanation": "bullet list string (see rules)",',
+    '      "example": "one concrete case, mini problem, or real-world application"',
     '    }',
     '  ]',
     '}',
@@ -209,8 +217,9 @@ function buildAnalyzePrompt(args: {
     'Writing style for each explanation (critical):',
     '- ALWAYS write the explanation as a BULLET LIST — never one long paragraph.',
     '- Put each point on its own line starting with "• " (Unicode bullet + space).',
-    '- Use 4 to 7 short bullets covering: what it is, how it works, key details, formulas/examples, and why it matters.',
-    '- For very large sets (30+ cards), 4 focused bullets per card is enough.',
+    '- Use 4 to 7 short bullets covering: what it is, how it works, key details, formulas, and why it matters.',
+    '- ALWAYS include one bullet that starts with "Example: " and gives a concrete case, worked mini-problem, or real-world application from the material (or a faithful illustration of the concept).',
+    '- For very large sets (30+ cards), 4 focused bullets per card is enough (still include the Example bullet).',
     '- Keep each bullet to one clear idea (about 1 short sentence).',
     '- Do not start bullets with markdown like **, *, __, or #.',
     '- Include formulas, mechanisms, comparisons, cause/effect, and examples from the material when present.',

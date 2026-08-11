@@ -72,6 +72,7 @@ def test_generate_then_save_and_review(client: TestClient):
     # Without an uploaded file, count still varies with content heuristics (8–16).
     assert 8 <= body["count"] <= 16
     assert len(body["cards"]) == body["count"]
+    assert "Example:" in body["cards"][0]["answer"]
     assert client.get("/api/subjects").json() == []
 
     subject = client.post("/api/subjects", json={"name": "Algebra", "icon": "➗"}).json()
@@ -114,6 +115,7 @@ def test_generate_scales_with_pdf_pages(client: TestClient):
     assert body["count"] >= 40
     assert body["count"] <= 60
     assert len(body["cards"]) == body["count"]
+    assert any("Example:" in card["answer"] for card in body["cards"])
 
 
 def test_quiz_requires_saved_cards(client: TestClient):

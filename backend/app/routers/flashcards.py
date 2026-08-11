@@ -20,6 +20,18 @@ from app.schemas import (
 
 router = APIRouter()
 
+# Reusable study-style examples used when the cloud API builds draft cards.
+_EXAMPLE_SNIPPETS = [
+    "If a plant sits in sunlight, sugar builds up in the leaves while oxygen is released.",
+    "For a right triangle with legs 3 and 4, the hypotenuse is 5 because 3² + 4² = 5².",
+    "Water freezing at 0°C is a physical change — the formula stays H₂O.",
+    "In 2x + 6 = 14, subtract 6 then divide by 2 to get x = 4.",
+    "A cell with damaged mitochondria makes far less ATP and tires quickly.",
+    "Saying “the mitochondria is the powerhouse of the cell” recalls energy production.",
+    "Pushing a stalled car uses Newton’s second law: more force → more acceleration.",
+    "Evaporation after rain cools skin because liquid water absorbs heat to become vapor.",
+]
+
 
 def _recount_mastered(cards: list[dict]) -> int:
     return sum(1 for card in cards if card.get("mastered"))
@@ -42,16 +54,21 @@ def _build_draft_cards(
 ) -> list[DraftFlashcard]:
     stem = Path(filename).stem.replace("_", " ").replace("-", " ").strip() or "your notes"
     count = estimate_card_count(source_type, file_bytes, filename=filename)
-    return [
-        DraftFlashcard(
-            question=f"What is key point #{i + 1} from {stem}?",
-            answer=(
-                f"Summarize point #{i + 1} from your {source_type} notes "
-                f"in “{stem}” using your own words."
-            ),
+    cards: list[DraftFlashcard] = []
+    for i in range(count):
+        example = _EXAMPLE_SNIPPETS[i % len(_EXAMPLE_SNIPPETS)]
+        cards.append(
+            DraftFlashcard(
+                question=f"Key idea {i + 1} from {stem}",
+                answer=(
+                    f"• Definition: core point #{i + 1} from your {source_type} notes in “{stem}”.\n"
+                    f"• How it works: connect this idea to the surrounding steps or facts in the material.\n"
+                    f"• Example: {example}\n"
+                    f"• Why it matters: this is a likely exam target from “{stem}”."
+                ),
+            )
         )
-        for i in range(count)
-    ]
+    return cards
 
 
 @router.post("/generate", response_model=GenerateDraftResponse)

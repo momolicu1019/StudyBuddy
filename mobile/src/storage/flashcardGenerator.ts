@@ -9,7 +9,7 @@ import {
   targetCardCount,
 } from './cardCount';
 import { estimatePdfPagesFromBase64 } from './contentExtract';
-import { formatExplanationAsBullets, isWeakKeyPointTitle, normalizeKeyPointTitle } from './explanationFormat';
+import { formatExplanationAsBullets, isWeakKeyPointTitle, normalizeKeyPointTitle, withExampleBullet } from './explanationFormat';
 import { generateAiText, generateWithGemini } from './geminiClient';
 import {
   labelForSource,
@@ -38,8 +38,12 @@ function looksLikeQuestion(text: string): boolean {
   );
 }
 
-function toReviewCard(title: string, summary: string): DraftFlashcard | null {
-  const back = formatExplanationAsBullets(summary);
+function toReviewCard(
+  title: string,
+  summary: string,
+  example?: string,
+): DraftFlashcard | null {
+  const back = withExampleBullet(summary, example);
   if (back.length < 40) return null;
   const front = normalizeKeyPointTitle(title, back);
   if (front.length < 2 || isWeakKeyPointTitle(front)) return null;
@@ -58,7 +62,6 @@ function buildExplanation(row: Record<string, unknown>): string {
     row.answer,
     row.why_it_matters,
     row.whyItMatters,
-    row.example,
     row.formula,
   ]
     .map((v) => String(v ?? '').trim())
@@ -71,6 +74,10 @@ function buildExplanation(row: Record<string, unknown>): string {
     }
   }
   return unique.join('\n\n').trim();
+}
+
+function pickExample(row: Record<string, unknown>): string {
+  return String(row.example ?? row.example_text ?? row.worked_example ?? '').trim();
 }
 
 function uniqueCards(cards: DraftFlashcard[]): DraftFlashcard[] {
@@ -138,7 +145,7 @@ export function parseGeminiCards(
         '',
     );
     const summary = buildExplanation(row);
-    const card = toReviewCard(title, summary);
+    const card = toReviewCard(title, summary, pickExample(row));
     if (!card) continue;
     if (looksLikeQuestion(card.question)) {
       card.question = card.question.replace(/\?+$/g, '').trim();
@@ -158,7 +165,8 @@ function flashcardInstructions(maxHint?: string): string {
     'Title must be the MOST IMPORTANT concept name (2–6 words), e.g. "Water Cycle" or "Photosynthesis".',
     'Never use truncated sentence starters as titles (bad: "The rain in", "Photosynthesis is the").',
     'Never end a title with a preposition/article (in, of, the, a, and, to, for, with…).',
-    'Write explanation as 4 to 7 short lines, each starting with "• ", covering: what it is, how it works, key details, formulas/examples, and why it matters.',
+    'Write explanation as 4 to 7 short lines, each starting with "• ", covering: what it is, how it works, key details, formulas, and why it matters.',
+    'ALWAYS include one bullet that starts with "Example: " with a concrete case, mini worked problem, or real-world application.',
     'Keep each bullet to one clear idea (about one short sentence).',
     'Do not start bullets with markdown like **, *, __, or #.',
     'Include formulas, processes, comparisons, and examples when present in the source.',
@@ -166,7 +174,7 @@ function flashcardInstructions(maxHint?: string): string {
     'Never narrate OCR/visual structure; convert the content into conceptual knowledge only.',
     'Do not invent facts not supported by the material.',
     'Never use markdown formatting (no **, __, `, # headings, or code fences). Plain text only.',
-    'Return ONLY valid JSON as an array of objects with keys "title" and "explanation".',
+    'Return ONLY valid JSON as an array of objects with keys "title", "explanation", and optional "example".',
     maxHint ??
       'Create as many cards as the material needs (typically 6–12 for a short page, up to 60 for long PDFs). Do not collapse rich multi-page notes into only ~12 cards.',
   ].join(' ');
@@ -470,11 +478,12 @@ export async function buildFlashcardsFromTutorReply(input: {
         'Convert the tutor answer into exam-review flashcards.',
         'Do NOT write quiz questions. Titles must be concept names.',
         'Each card needs title + a BULLETED explanation (4–7 lines starting with "• "; never one paragraph).',
+        'ALWAYS include one bullet that starts with "Example: " giving a concrete case or mini application.',
         'Title must be the most important concept name (2–6 words), never a truncated sentence starter.',
         'Use ONLY the academic content. Ignore any meta about missing flashcards, AI errors, tips, or app features.',
         'Do not mention chat, tutors, or that this came from an AI reply.',
         'Plain text only — never use markdown (no **, __, `, or # headings).',
-        'Return ONLY valid JSON array with keys "title" and "explanation".',
+        'Return ONLY valid JSON array with keys "title", "explanation", and optional "example".',
         cardCountInstruction({
           ...tutorTarget,
           max: tutorLimit,

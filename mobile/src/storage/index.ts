@@ -12,4 +12,12 @@ export {
 } from './cloud';
 export type { GoogleUser, AuthUser, AuthSession, CloudActionResult } from './cloud';
 export { loadLocalDb, resetLocalDb } from './store';
-export type { LocalDatabase, AppSettings, StoredSource } from './schema';
+export type { LocalDatabase, AppSettings, StoredSource, Deadline } from './schema';
+export {
+  daysUntilDue,
+  formatDueDate,
+  getDeadlineUrgency,
+  needsDeadlineBulb,
+  sortDeadlines,
+  toIsoDate,
+} from './deadlineUtils';

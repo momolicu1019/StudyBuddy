@@ -1,6 +1,6 @@
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -10,9 +10,10 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
+import { api } from '../api/client';
 import type { GenerateDraftResponse, Subject } from '../api/types';
 import {
   AppModal,
@@ -24,6 +25,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
+import { needsDeadlineBulb } from '../storage/deadlineUtils';
 import {
   DOCUMENT_PICKER_TYPES,
   detectSourceKind,
@@ -69,6 +71,24 @@ export function DashboardScreen() {
   const [savedSubject, setSavedSubject] = useState<Subject | null>(null);
   const [folderName, setFolderName] = useState('');
   const [folderIcon, setFolderIcon] = useState('📚');
+  const [deadlineBulb, setDeadlineBulb] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void (async () => {
+        try {
+          const deadlines = await api.getDeadlines();
+          if (active) setDeadlineBulb(needsDeadlineBulb(deadlines));
+        } catch {
+          if (active) setDeadlineBulb(false);
+        }
+      })();
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   const hasProgress =
     stats.flashcards_reviewed > 0 ||
@@ -299,24 +319,44 @@ export function DashboardScreen() {
               title: 'Flashcards',
               desc: 'Browse subjects, study cards, and manage folders.',
               onPress: () => navigation.navigate('Flashcards'),
+              showBulb: false,
             },
             {
               icon: '🧠',
               title: 'Quiz Mode',
               desc: 'Test what you know and track your score.',
               onPress: () => navigation.navigate('Quiz', {}),
+              showBulb: false,
+            },
+            {
+              icon: '📅',
+              title: 'Deadlines and Due Date',
+              desc: 'Create due dates and track what is coming up.',
+              onPress: () => navigation.navigate('Deadlines'),
+              showBulb: deadlineBulb,
             },
             {
               icon: '✨',
               title: 'AI Tutor',
               desc: 'Ask questions and get step-by-step help.',
               onPress: () => navigation.navigate('AITutor', {}),
+              showBulb: false,
             },
           ].map((tile) => (
             <Pressable key={tile.title} style={styles.tile} onPress={tile.onPress}>
               <IconBubble size={54}>{tile.icon}</IconBubble>
               <View style={{ flex: 1 }}>
-                <Text style={styles.tileTitle}>{tile.title}</Text>
+                <View style={styles.tileTitleRow}>
+                  <Text style={styles.tileTitle}>{tile.title}</Text>
+                  {tile.showBulb ? (
+                    <Text
+                      style={styles.tileBulb}
+                      accessibilityLabel="Upcoming deadline reminder"
+                    >
+                      💡
+                    </Text>
+                  ) : null}
+                </View>
                 <Text style={styles.sub}>{tile.desc}</Text>
               </View>
               <Text style={styles.chevron}>›</Text>
@@ -602,6 +642,13 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   tileTitle: { fontSize: 17, fontWeight: '750' as unknown as '700', color: colors.ink },
+  tileTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  tileBulb: { fontSize: 16 },
   chevron: { fontSize: 28, color: colors.muted, marginTop: -4 },
   stats: {
     flexDirection: 'row',

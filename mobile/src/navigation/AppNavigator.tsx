@@ -21,6 +21,7 @@ import { AboutModal } from '../screens/AboutModal';
 import { AccountModal } from '../screens/AccountModal';
 import { AITutorScreen } from '../screens/AITutorScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
+import { DeadlinesScreen } from '../screens/DeadlinesScreen';
 import { FlashcardsScreen } from '../screens/FlashcardsScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { PomodoroScreen } from '../screens/PomodoroScreen';
@@ -229,6 +230,11 @@ export function AppNavigator() {
                 name="Quiz"
                 component={QuizScreen}
                 options={{ title: 'Quiz Mode' }}
+              />
+              <Stack.Screen
+                name="Deadlines"
+                component={DeadlinesScreen}
+                options={{ title: 'Deadlines and Due Date' }}
               />
               <Stack.Screen
                 name="AITutor"

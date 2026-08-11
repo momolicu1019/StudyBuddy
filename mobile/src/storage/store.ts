@@ -19,6 +19,7 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
       quizzes_taken: raw.progress?.quizzes_taken ?? 0,
     },
     quizzes: raw.quizzes ?? [],
+    deadlines: Array.isArray(raw.deadlines) ? raw.deadlines : [],
     settings: {
       cloud_sync_enabled: raw.settings?.cloud_sync_enabled ?? false,
       daily_goal_minutes: raw.settings?.daily_goal_minutes ?? 25,
@@ -26,6 +27,7 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
     next_subject_id: raw.next_subject_id ?? 1,
     next_card_id: raw.next_card_id ?? 1,
     next_pdf_id: raw.next_pdf_id ?? 1,
+    next_deadline_id: raw.next_deadline_id ?? 1,
   };
 }
 

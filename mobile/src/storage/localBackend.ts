@@ -2,7 +2,7 @@
  * Local-first backend for Study Buddy.
  *
  * Primary storage (on device):
- *   Flashcards · Subjects · PDFs · Progress · Quizzes · Settings
+ *   Flashcards · Subjects · PDFs · Progress · Quizzes · Deadlines · Settings
  *
  * Optional cloud (stubs in ./cloud.ts):
  *   Backup · Account · Sync · Devices
@@ -22,6 +22,7 @@ import type {
 } from '../api/types';
 import { formatExplanationAsBullets, normalizeKeyPointTitle } from './explanationFormat';
 import { persistSourceFile } from './pdfs';
+import type { Deadline } from './schema';
 import type { SourceKind } from './sourceMime';
 import { labelForSource } from './sourceMime';
 import { loadLocalDb, updateLocalDb } from './store';
@@ -357,5 +358,51 @@ export const localBackend = {
       settings = db.settings;
     });
     return settings!;
+  },
+
+  async getDeadlines(): Promise<Deadline[]> {
+    const db = await loadLocalDb();
+    return db.deadlines;
+  },
+
+  async createDeadline(title: string, dueDate: string): Promise<Deadline> {
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error('Deadline title is required');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+      throw new Error('Due date must be YYYY-MM-DD');
+    }
+
+    let created!: Deadline;
+    await updateLocalDb((db) => {
+      created = {
+        id: db.next_deadline_id,
+        title: trimmed,
+        due_date: dueDate,
+        completed: false,
+        created_at: new Date().toISOString(),
+      };
+      db.next_deadline_id += 1;
+      db.deadlines.push(created);
+    });
+    return created;
+  },
+
+  async completeDeadline(id: number): Promise<Deadline> {
+    let updated!: Deadline;
+    await updateLocalDb((db) => {
+      const item = db.deadlines.find((d) => d.id === id);
+      if (!item) throw new Error('Deadline not found');
+      item.completed = true;
+      updated = item;
+    });
+    return updated;
+  },
+
+  async deleteDeadline(id: number): Promise<void> {
+    await updateLocalDb((db) => {
+      const before = db.deadlines.length;
+      db.deadlines = db.deadlines.filter((d) => d.id !== id);
+      if (db.deadlines.length === before) throw new Error('Deadline not found');
+    });
   },
 };

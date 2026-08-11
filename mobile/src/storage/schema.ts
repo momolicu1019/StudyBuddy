@@ -9,10 +9,21 @@ export type LocalDatabase = {
   pdfs: StoredSource[];
   progress: Stats & { quizzes_taken: number };
   quizzes: QuizResultRecord[];
+  deadlines: Deadline[];
   settings: AppSettings;
   next_subject_id: number;
   next_card_id: number;
   next_pdf_id: number;
+  next_deadline_id: number;
+};
+
+/** Student deadline / due-date entry. `due_date` is YYYY-MM-DD (local calendar day). */
+export type Deadline = {
+  id: number;
+  title: string;
+  due_date: string;
+  completed: boolean;
+  created_at: string;
 };
 
 export type StoredSource = {
@@ -51,6 +62,7 @@ export const EMPTY_LOCAL_DB: LocalDatabase = {
     quizzes_taken: 0,
   },
   quizzes: [],
+  deadlines: [],
   settings: {
     cloud_sync_enabled: false,
     daily_goal_minutes: 25,
@@ -58,6 +70,7 @@ export const EMPTY_LOCAL_DB: LocalDatabase = {
   next_subject_id: 1,
   next_card_id: 1,
   next_pdf_id: 1,
+  next_deadline_id: 1,
 };
 
 export type { DraftFlashcard };

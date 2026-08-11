@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from app.card_counts import estimate_card_count
 from app.database import load_data, save_data
 from app.schemas import (
     DraftFlashcard,
@@ -33,9 +34,14 @@ def _public_stats(data: dict) -> Stats:
     )
 
 
-def _build_draft_cards(source_type: str, filename: str) -> list[DraftFlashcard]:
+def _build_draft_cards(
+    source_type: str,
+    filename: str,
+    *,
+    file_bytes: bytes | None = None,
+) -> list[DraftFlashcard]:
     stem = Path(filename).stem.replace("_", " ").replace("-", " ").strip() or "your notes"
-    count = 8 if source_type == "photo" else 12
+    count = estimate_card_count(source_type, file_bytes, filename=filename)
     return [
         DraftFlashcard(
             question=f"What is key point #{i + 1} from {stem}?",
@@ -58,12 +64,13 @@ async def generate_flashcards(
     if source_type not in {"pdf", "photo"}:
         raise HTTPException(status_code=422, detail="source_type must be pdf or photo")
 
+    file_bytes: bytes | None = None
     if file is not None:
-        await file.read()
+        file_bytes = await file.read()
         if file.filename:
             filename = file.filename
 
-    cards = _build_draft_cards(source_type, filename)
+    cards = _build_draft_cards(source_type, filename, file_bytes=file_bytes)
     sample = cards[0]
     return GenerateDraftResponse(
         count=len(cards),

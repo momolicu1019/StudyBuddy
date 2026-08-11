@@ -203,3 +203,17 @@ export function extractTextFromPdfBytes(pdfBytes: Uint8Array): string {
     .join('')
     .trim();
 }
+
+/**
+ * Best-effort page count from PDF object markers (no heavyweight PDF lib).
+ */
+export function estimatePdfPageCount(pdfBytes: Uint8Array): number | undefined {
+  if (!pdfBytes.length) return undefined;
+  const latin1 = bytesToLatin1(pdfBytes);
+  // "/Type /Page" is also a prefix of "/Type /Pages", so subtract tree nodes.
+  const pages =
+    (latin1.match(/\/Type\s*\/Page/g) || []).length -
+    (latin1.match(/\/Type\s*\/Pages/g) || []).length;
+  if (pages <= 0) return undefined;
+  return pages;
+}

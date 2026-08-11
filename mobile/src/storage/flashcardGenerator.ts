@@ -9,7 +9,7 @@ import {
   targetCardCount,
 } from './cardCount';
 import { estimatePdfPagesFromBase64 } from './contentExtract';
-import { formatExplanationAsBullets, isWeakKeyPointTitle, normalizeKeyPointTitle, withExampleBullet } from './explanationFormat';
+import { isWeakKeyPointTitle, normalizeKeyPointTitle, withExampleBullet } from './explanationFormat';
 import { generateAiText, generateWithGemini } from './geminiClient';
 import {
   labelForSource,

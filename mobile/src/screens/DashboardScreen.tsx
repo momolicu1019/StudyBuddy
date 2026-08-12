@@ -273,7 +273,7 @@ export function DashboardScreen() {
           <IconBubble size={58}>📚</IconBubble>
           <Text style={styles.uploadTitle}>Create flashcards from your notes</Text>
           <Text style={styles.subCenter}>
-            Upload a study file, take a photo, or choose a photo from your phone
+            Upload a study file, take a photo, choose a photo, or type notes without AI
           </Text>
           <PrimaryButton
             label="📄 Upload file"
@@ -294,6 +294,12 @@ export function DashboardScreen() {
               style={styles.flexBtn}
             />
           </View>
+          <PrimaryButton
+            label="✍️ Type Notes"
+            onPress={() => navigation.navigate('TypeNotes')}
+            variant="secondary"
+            style={{ marginTop: 10, alignSelf: 'stretch' }}
+          />
 
           {selectedSource && (
             <View style={styles.sourceBox}>

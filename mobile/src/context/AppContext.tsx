@@ -37,6 +37,7 @@ type AppContextValue = {
   saveDraftFlashcards: (
     subjectId: number,
     cards: DraftFlashcard[],
+    options?: { preserveContent?: boolean },
   ) => Promise<SaveFlashcardsResponse>;
   applySubjectUpdate: (subject: Subject) => void;
   setStats: (stats: Stats) => void;
@@ -123,8 +124,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   );
 
   const saveDraftFlashcards = useCallback(
-    async (subjectId: number, cards: DraftFlashcard[]) => {
-      const result = await api.saveFlashcards(subjectId, cards);
+    async (
+      subjectId: number,
+      cards: DraftFlashcard[],
+      options?: { preserveContent?: boolean },
+    ) => {
+      const result = await api.saveFlashcards(subjectId, cards, options);
       applySubjectUpdate(result.subject);
       return result;
     },

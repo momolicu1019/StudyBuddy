@@ -27,6 +27,7 @@ import { LoginScreen } from '../screens/LoginScreen';
 import { PomodoroScreen } from '../screens/PomodoroScreen';
 import { QuizScreen } from '../screens/QuizScreen';
 import { StudyScreen } from '../screens/StudyScreen';
+import { TypeNotesScreen } from '../screens/TypeNotesScreen';
 import { colors } from '../theme/colors';
 import type { MainTabParamList, RootStackParamList } from './types';
 
@@ -220,6 +221,11 @@ export function AppNavigator() {
                 name="Flashcards"
                 component={FlashcardsScreen}
                 options={{ title: 'Flashcards' }}
+              />
+              <Stack.Screen
+                name="TypeNotes"
+                component={TypeNotesScreen}
+                options={{ title: 'Type Notes' }}
               />
               <Stack.Screen
                 name="Study"

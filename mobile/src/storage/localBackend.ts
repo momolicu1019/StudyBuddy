@@ -168,18 +168,26 @@ export const localBackend = {
   async saveFlashcards(
     subjectId: number,
     cards: DraftFlashcard[],
+    options?: { preserveContent?: boolean },
   ): Promise<SaveFlashcardsResponse> {
     let subject!: Subject;
+    const preserve = options?.preserveContent === true;
     await updateLocalDb((db) => {
       const found = db.subjects.find((s) => s.id === subjectId);
       if (!found) throw new Error('Subject not found');
       const key = String(subjectId);
       db.flashcards[key] = db.flashcards[key] ?? [];
       for (const draft of cards) {
-        const answer = formatExplanationAsBullets(draft.answer);
+        const question = draft.question.trim();
+        const rawAnswer = draft.answer.trim();
+        const answer = preserve
+          ? rawAnswer
+          : formatExplanationAsBullets(rawAnswer);
         db.flashcards[key].push({
           id: db.next_card_id,
-          question: normalizeKeyPointTitle(draft.question, answer),
+          question: preserve
+            ? question
+            : normalizeKeyPointTitle(question, answer),
           answer,
           mastered: false,
         });

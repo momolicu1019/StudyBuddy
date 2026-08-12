@@ -24,7 +24,7 @@ import {
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Quiz'>;
-type Phase = 'select' | 'quiz' | 'results' | 'mistakes';
+type Phase = 'select' | 'quiz' | 'results' | 'summary';
 
 type AnswerMap = Record<
   number,
@@ -183,15 +183,13 @@ export function QuizScreen({ route, navigation }: Props) {
     );
   }
 
-  if ((phase === 'results' || phase === 'mistakes') && result) {
+  if ((phase === 'results' || phase === 'summary') && result) {
     const incorrect = result.total - result.score;
-    const mistakeReviews = result.reviews.filter((r) => !r.is_correct);
-    const showingMistakes = phase === 'mistakes';
-    const reviewsToShow = showingMistakes ? mistakeReviews : result.reviews;
+    const showingSummary = phase === 'summary';
 
     return (
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-        {!showingMistakes ? (
+        {!showingSummary ? (
           <>
             <Text style={styles.completeTitle}>🎉 Quiz Complete!</Text>
             <Text style={styles.scoreLine}>
@@ -233,15 +231,9 @@ export function QuizScreen({ route, navigation }: Props) {
 
             <View style={[styles.row, { marginTop: 8 }]}>
               <PrimaryButton
-                label="Review Mistakes"
+                label="Quiz Summary"
                 variant="secondary"
-                onPress={() => {
-                  if (!mistakeReviews.length) {
-                    showToast('No mistakes to review');
-                    return;
-                  }
-                  setPhase('mistakes');
-                }}
+                onPress={() => setPhase('summary')}
                 style={{ flex: 1 }}
               />
               <PrimaryButton
@@ -259,49 +251,58 @@ export function QuizScreen({ route, navigation }: Props) {
           </>
         ) : (
           <>
-            <Text style={styles.h1}>Review mistakes</Text>
+            <Text style={styles.h1}>Quiz summary</Text>
             <Text style={[styles.sub, { marginBottom: 16 }]}>
-              {mistakeReviews.length} incorrect · focus on these topics next
+              {result.score} correct · {incorrect} incorrect · every question
             </Text>
-          </>
-        )}
 
-        {showingMistakes
-          ? reviewsToShow.map((review, reviewIndex) => (
+            {result.reviews.map((review, reviewIndex) => (
               <Card
                 key={`${review.id}-${reviewIndex}`}
-                style={[styles.reviewCard, styles.reviewWrong]}
+                style={[
+                  styles.reviewCard,
+                  review.is_correct ? styles.reviewCorrect : styles.reviewWrong,
+                ]}
               >
                 <Text style={styles.reviewLabel}>
-                  {kindLabel(review.kind)} · Incorrect
+                  Q{reviewIndex + 1} · {kindLabel(review.kind)} ·{' '}
+                  {review.is_correct ? 'Correct' : 'Incorrect'}
                   {review.topic ? ` · ${review.topic}` : ''}
                 </Text>
                 <Text style={styles.reviewQuestion}>{review.question}</Text>
-                <Text style={[styles.sub, { marginTop: 10 }]}>
+                <Text
+                  style={[
+                    styles.yourAnswerLine,
+                    review.is_correct
+                      ? styles.yourAnswerCorrect
+                      : styles.yourAnswerWrong,
+                  ]}
+                >
                   Your answer: {review.selected_answer ?? '—'}
                 </Text>
-                <Text style={styles.correctAnswerLine}>
-                  Correct answer is {review.correct_answer}
-                </Text>
+                {!review.is_correct ? (
+                  <Text style={styles.correctAnswerLine}>
+                    Correct answer: {review.correct_answer}
+                  </Text>
+                ) : null}
               </Card>
-            ))
-          : null}
+            ))}
 
-        {showingMistakes ? (
-          <View style={[styles.row, { marginTop: 8 }]}>
-            <PrimaryButton
-              label="Back to summary"
-              variant="secondary"
-              onPress={() => setPhase('results')}
-              style={{ flex: 1 }}
-            />
-            <PrimaryButton
-              label="Try Again"
-              onPress={() => void startQuiz()}
-              style={{ flex: 1 }}
-            />
-          </View>
-        ) : null}
+            <View style={[styles.row, { marginTop: 8 }]}>
+              <PrimaryButton
+                label="Back to results"
+                variant="secondary"
+                onPress={() => setPhase('results')}
+                style={{ flex: 1 }}
+              />
+              <PrimaryButton
+                label="Try Again"
+                onPress={() => void startQuiz()}
+                style={{ flex: 1 }}
+              />
+            </View>
+          </>
+        )}
       </ScrollView>
     );
   }
@@ -660,6 +661,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1.5,
   },
+  reviewCorrect: {
+    borderColor: colors.success,
+    backgroundColor: colors.successSoft,
+  },
   reviewWrong: {
     borderColor: colors.danger,
     backgroundColor: colors.dangerSoft,
@@ -675,8 +680,19 @@ const styles = StyleSheet.create({
     color: colors.ink,
     lineHeight: 22,
   },
+  yourAnswerLine: {
+    marginTop: 10,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  yourAnswerCorrect: {
+    color: '#1F7A4D',
+  },
+  yourAnswerWrong: {
+    color: colors.danger,
+  },
   correctAnswerLine: {
-    marginTop: 12,
+    marginTop: 8,
     fontWeight: '800',
     color: '#1F7A4D',
     fontSize: 14,

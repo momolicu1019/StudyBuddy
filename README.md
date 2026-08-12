@@ -133,16 +133,16 @@ See [backend/README.md](backend/README.md) if you want to run the FastAPI servic
 
 ### CI builds (Android APK + iOS IPA)
 
-Pushing changes under `mobile/` to `main` builds **Android** automatically, waits for EAS to finish, then publishes:
+Pushing changes under `mobile/` (or this workflow file) to `main` builds **Android and iOS** automatically, waits for EAS to finish, then publishes:
 
-- GitHub Actions artifact
-- GitHub Release **`studybuddy_v1.0.0`** (from `app.json` → `expo.version`) with `studybuddy_v1.0.0.apk`
+- GitHub Actions artifacts
+- GitHub Release **`studybuddy_v1.0.1`** (from `app.json` → `expo.version`) with `studybuddy_v1.0.1.apk` and `studybuddy_v1.0.1.ipa`
 
-**iOS** IPA (`studybuddy_v1.0.0.ipa`) is added to the same release after you create Apple credentials once and run the workflow with platform `ios` or `all`.
+You can still run **Actions → EAS Build → Run workflow** and pick platform `android`, `ios`, or `all`.
 
 1. Create an Expo access token: https://expo.dev/settings/access-tokens
 2. Add it as a GitHub Actions secret named `EXPO_TOKEN`
-3. One-time iOS setup on your machine (Apple Developer account required):
+3. One-time iOS setup on your machine (Apple Developer account required) before the first CI iOS build:
 
 ```bash
 cd mobile
@@ -151,7 +151,9 @@ npx eas-cli device:create
 npx eas-cli build --platform ios --profile preview
 ```
 
-Release page: **GitHub → Releases → studybuddy_v1.0.0**. Bump `expo.version` in `mobile/app.json` when you want `studybuddy_v1.0.1`, etc.
+4. Set `EXPO_PUBLIC_GOOGLE_*` / AI env vars in the Expo project environments (`preview` / `production`) so CI builds pick them up (local `mobile/.env` is not used by GitHub Actions).
+
+Release page: **GitHub → Releases → studybuddy_v1.0.1**. Bump `expo.version` in `mobile/app.json` when you want the next tag, etc.
 
 ## Design
 

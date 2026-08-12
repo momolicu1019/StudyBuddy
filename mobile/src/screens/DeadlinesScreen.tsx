@@ -202,7 +202,8 @@ export function DeadlinesScreen() {
               <Text style={styles.h1}>Deadlines and Due Date</Text>
               <Text style={[styles.sub, { marginTop: 6 }]}>
                 Track assignments and exams. Entries turn amber within a week and
-                red when due tomorrow or overdue.
+                red when due tomorrow or overdue — StudyBuddy can notify your
+                phone for amber and red deadlines only.
               </Text>
             </View>
             {showBulb ? (

@@ -87,6 +87,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { ensureDeadlineNotificationHandler, syncDeadlineNotifications } =
+          await import('../storage/deadlineNotifications');
+        ensureDeadlineNotificationHandler();
+        const deadlines = await api.getDeadlines();
+        if (!cancelled) {
+          await syncDeadlineNotifications(deadlines);
+        }
+      } catch {
+        // Best-effort reminders; app still works offline without them.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const createSubject = useCallback(
     async (name: string, icon: string) => {
       const created = await api.createSubject(name, icon);

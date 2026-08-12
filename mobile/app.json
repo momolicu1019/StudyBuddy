@@ -19,7 +19,8 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "StudyBuddy needs camera access to photograph your notes and generate flashcards.",
-        "NSPhotoLibraryUsageDescription": "StudyBuddy needs photo library access to import note images."
+        "NSPhotoLibraryUsageDescription": "StudyBuddy needs photo library access to import note images.",
+        "NSUserNotificationsUsageDescription": "StudyBuddy sends reminders when a deadline turns amber (within a week) or red (due soon or overdue)."
       }
     },
     "android": {
@@ -33,7 +34,10 @@
       },
       "permissions": [
         "CAMERA",
-        "READ_MEDIA_IMAGES"
+        "READ_MEDIA_IMAGES",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "SCHEDULE_EXACT_ALARM"
       ],
       "predictiveBackGestureEnabled": false
     },
@@ -51,7 +55,15 @@
       ],
       "expo-web-browser",
       "expo-asset",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-notifications",
+        {
+          "color": "#6C63FF",
+          "defaultChannel": "deadline-reminders",
+          "sounds": []
+        }
+      ]
     ],
     "extra": {
       "eas": {

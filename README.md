@@ -24,11 +24,11 @@ Study Buddy
     └── Devices
 ```
 
-On-device code lives in `mobile/src/storage/`. Google account backup/sync is optional via the login screen and the avatar menu (`Backup now` / `Restore`).
+On-device code lives in `mobile/src/storage/`. Sign in is optional via the login screen; PDF backup/restore is available from the avatar menu (`Backup now` / `Restore`).
 
 ## Features
 
-- Optional **Continue with Google** login for cloud backup / restore
+- Optional **Continue with Google** or email login
 - Dashboard with note upload (PDF / photo) → generate flashcards → save to a folder
 - Subject folders (create, rename, delete, search)
 - Flashcard study mode
@@ -40,7 +40,7 @@ On-device code lives in `mobile/src/storage/`. Google account backup/sync is opt
 ## Project structure
 
 ```
-mobile/           Expo React Native app (iOS + Android) + local storage + Google backup
+mobile/           Expo React Native app (iOS + Android) + local storage + Google login
 backend/          Optional FastAPI cloud API (not required for local use)
 ```
 
@@ -58,18 +58,18 @@ Then press:
 - `a` for Android emulator
 - scan the QR code with Expo Go on a physical device
 
-### Login & Google backup
+### Login & Google sign-in
 
-1. On first launch, choose **Continue with Google** (backup) or **Continue without backup** (local only).
-2. Tap the avatar (top right) anytime to sign in, **Backup now**, or **Restore from backup**.
+1. On first launch, choose **Continue with Google**, create an email account, or **Continue without an account**.
+2. Tap the avatar (top right) anytime to manage PDF **Backup now** / **Restore**, or sign out.
 3. Without Google Cloud credentials the app uses a **demo Google session** so you can exercise the UI on-device.
-4. For real Google Drive App Data backup, copy `mobile/.env.example` → `mobile/.env` and set:
+4. For real Google OAuth, copy `mobile/.env.example` → `mobile/.env` and set:
 
 ```bash
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=your-web-client-id.apps.googleusercontent.com
 ```
 
-Enable the **Google Drive API** in Google Cloud Console and add OAuth redirect URIs for Expo / your app scheme `studybuddy`.
+Add OAuth redirect URIs for Expo / your app scheme `studybuddy` in Google Cloud Console.
 
 The app starts **empty** and stores data on the device. Typical study flow:
 

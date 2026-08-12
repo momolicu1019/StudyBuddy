@@ -6,11 +6,16 @@ import React, {
   useMemo,
   useState,
 } from 'react';
+import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
+import { makeRedirectUri } from 'expo-auth-session';
 
 import {
   backupLocalData,
   clearAuthState,
   createLocalAccount,
+  getGoogleOAuthConfig,
+  isGoogleOAuthConfigured,
   loadAuthState,
   restoreLocalData,
   saveAuthState,
@@ -20,11 +25,18 @@ import {
   type CloudActionResult,
 } from '../storage/cloud';
 
+WebBrowser.maybeCompleteAuthSession();
+
 type AuthContextValue = {
   ready: boolean;
   session: AuthSession | null;
   skippedLogin: boolean;
   isSignedIn: boolean;
+  googleConfigured: boolean;
+  signInWithGoogle: (profile?: {
+    name?: string;
+    email?: string;
+  }) => Promise<CloudActionResult>;
   signInWithEmail: (email: string, password: string) => Promise<CloudActionResult>;
   createAccount: (
     name: string,
@@ -46,7 +58,7 @@ function initialsFromName(name: string): string {
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+function useAuthSession() {
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [skippedLogin, setSkippedLogin] = useState(false);
@@ -130,6 +142,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [finishSignIn],
   );
 
+  const signInWithDemoGoogle = useCallback(
+    async (profile?: { name?: string; email?: string }) => {
+      const name = profile?.name?.trim() || 'Study Buddy Student';
+      const email = (profile?.email?.trim() || 'student@gmail.com').toLowerCase();
+      const user: AuthUser = {
+        id: `google-demo-${email}`,
+        email,
+        name,
+        provider: 'google',
+        isDemo: true,
+      };
+      return finishSignIn(user);
+    },
+    [finishSignIn],
+  );
+
   const skipLogin = useCallback(async () => {
     await persist({ session: null, skippedLogin: true });
   }, [persist]);
@@ -183,33 +211,177 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [persist, session]);
 
+  return {
+    ready,
+    session,
+    skippedLogin,
+    persist,
+    finishSignIn,
+    signInWithEmail,
+    createAccount,
+    signInWithDemoGoogle,
+    skipLogin,
+    signOut,
+    backupNow,
+    restoreNow,
+  };
+}
+
+/** Local email/password + demo Google (no OAuth client ID required). */
+function LocalAuthProvider({ children }: { children: React.ReactNode }) {
+  const auth = useAuthSession();
+
   const value = useMemo<AuthContextValue>(
     () => ({
-      ready,
-      session,
-      skippedLogin,
-      isSignedIn: Boolean(session?.user),
-      signInWithEmail,
-      createAccount,
-      skipLogin,
-      signOut,
-      backupNow,
-      restoreNow,
+      ready: auth.ready,
+      session: auth.session,
+      skippedLogin: auth.skippedLogin,
+      isSignedIn: Boolean(auth.session?.user),
+      googleConfigured: false,
+      signInWithGoogle: auth.signInWithDemoGoogle,
+      signInWithEmail: auth.signInWithEmail,
+      createAccount: auth.createAccount,
+      skipLogin: auth.skipLogin,
+      signOut: auth.signOut,
+      backupNow: auth.backupNow,
+      restoreNow: auth.restoreNow,
     }),
     [
-      ready,
-      session,
-      skippedLogin,
-      signInWithEmail,
-      createAccount,
-      skipLogin,
-      signOut,
-      backupNow,
-      restoreNow,
+      auth.ready,
+      auth.session,
+      auth.skippedLogin,
+      auth.signInWithDemoGoogle,
+      auth.signInWithEmail,
+      auth.createAccount,
+      auth.skipLogin,
+      auth.signOut,
+      auth.backupNow,
+      auth.restoreNow,
     ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+/** Real Google OAuth when EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID is set. */
+function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
+  const auth = useAuthSession();
+  const oauth = getGoogleOAuthConfig()!;
+  const redirectUri = makeRedirectUri({
+    scheme: 'studybuddy',
+    path: 'oauth',
+  });
+
+  const [request, , promptAsync] = Google.useAuthRequest({
+    webClientId: oauth.webClientId,
+    iosClientId: oauth.iosClientId,
+    androidClientId: oauth.androidClientId,
+    scopes: ['openid', 'profile', 'email'],
+    redirectUri,
+  });
+
+  const signInWithGoogle = useCallback(async () => {
+    try {
+      if (!request) {
+        return {
+          ok: false,
+          message: 'Google sign-in is still preparing. Please try again in a moment.',
+        };
+      }
+
+      const result = await promptAsync({ showInRecents: true });
+      if (result.type === 'dismiss' || result.type === 'cancel') {
+        return { ok: false, message: 'Google sign-in was cancelled.' };
+      }
+      if (result.type !== 'success') {
+        return {
+          ok: false,
+          message: 'Google sign-in failed. Check your OAuth client IDs and try again.',
+        };
+      }
+
+      const accessToken =
+        result.authentication?.accessToken ||
+        (result as { params?: { access_token?: string } }).params?.access_token;
+      if (!accessToken) {
+        return {
+          ok: false,
+          message:
+            'Google did not return an access token. Confirm your Web client ID and redirect URI.',
+        };
+      }
+
+      const profileRes = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!profileRes.ok) {
+        return { ok: false, message: 'Could not load your Google profile.' };
+      }
+
+      const profile = (await profileRes.json()) as {
+        id: string;
+        email: string;
+        name: string;
+        picture?: string;
+      };
+
+      return auth.finishSignIn({
+        id: profile.id,
+        email: profile.email,
+        name: profile.name || profile.email.split('@')[0] || 'Student',
+        photoUrl: profile.picture,
+        accessToken,
+        provider: 'google',
+        isDemo: false,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Could not sign in with Google. Please try again.',
+      };
+    }
+  }, [auth, promptAsync, request]);
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      ready: auth.ready,
+      session: auth.session,
+      skippedLogin: auth.skippedLogin,
+      isSignedIn: Boolean(auth.session?.user),
+      googleConfigured: true,
+      signInWithGoogle,
+      signInWithEmail: auth.signInWithEmail,
+      createAccount: auth.createAccount,
+      skipLogin: auth.skipLogin,
+      signOut: auth.signOut,
+      backupNow: auth.backupNow,
+      restoreNow: auth.restoreNow,
+    }),
+    [
+      auth.ready,
+      auth.session,
+      auth.skippedLogin,
+      auth.signInWithEmail,
+      auth.createAccount,
+      auth.skipLogin,
+      auth.signOut,
+      auth.backupNow,
+      auth.restoreNow,
+      signInWithGoogle,
+    ],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  if (isGoogleOAuthConfigured()) {
+    return <GoogleAuthProvider>{children}</GoogleAuthProvider>;
+  }
+  return <LocalAuthProvider>{children}</LocalAuthProvider>;
 }
 
 export function useAuth() {

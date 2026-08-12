@@ -3,6 +3,7 @@ export {
   backupLocalData,
   clearAuthState,
   createLocalAccount,
+  getGoogleOAuthConfig,
   getGoogleWebClientId,
   isGoogleOAuthConfigured,
   loadAuthState,
@@ -10,7 +11,13 @@ export {
   saveAuthState,
   signInLocalAccount,
 } from './cloud';
-export type { GoogleUser, AuthUser, AuthSession, CloudActionResult } from './cloud';
+export type {
+  GoogleUser,
+  GoogleOAuthConfig,
+  AuthUser,
+  AuthSession,
+  CloudActionResult,
+} from './cloud';
 export { loadLocalDb, resetLocalDb } from './store';
 export type { LocalDatabase, AppSettings, StoredSource, Deadline, TutorChat, TutorChatMessage } from './schema';
 export {

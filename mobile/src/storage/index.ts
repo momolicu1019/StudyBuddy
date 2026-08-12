@@ -15,6 +15,12 @@ export {
   saveAuthState,
   signInLocalAccount,
 } from './cloud';
+export {
+  GOOGLE_DRIVE_APPDATA_SCOPE,
+  syncDownFromGoogleDrive,
+  syncUpToGoogleDrive,
+} from './googleDriveSync';
+export type { GoogleDriveSyncPayload } from './googleDriveSync';
 export type {
   GoogleUser,
   GoogleOAuthConfig,
@@ -22,7 +28,15 @@ export type {
   AuthSession,
   CloudActionResult,
 } from './cloud';
-export { loadLocalDb, resetLocalDb } from './store';
+export {
+  GUEST_STORAGE_SCOPE,
+  getActiveStorageScope,
+  loadLocalDb,
+  resetLocalDb,
+  setActiveStorageScope,
+  sourcesDirForScope,
+  storageKeyForScope,
+} from './store';
 export type { LocalDatabase, AppSettings, StoredSource, Deadline, TutorChat, TutorChatMessage } from './schema';
 export {
   daysUntilDue,

@@ -178,12 +178,59 @@ export async function restoreLocalData(
   return restoreFlashcardsFromPdfs();
 }
 
-/** @deprecated Google OAuth is no longer used for login/backup. */
-export function isGoogleOAuthConfigured(): boolean {
-  return false;
+type GoogleExtra = {
+  googleWebClientId?: string;
+  googleIosClientId?: string;
+  googleAndroidClientId?: string;
+};
+
+function readGoogleExtra(): GoogleExtra {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Constants = require('expo-constants').default as {
+      expoConfig?: { extra?: GoogleExtra };
+    };
+    return Constants.expoConfig?.extra ?? {};
+  } catch {
+    return {};
+  }
 }
 
-/** @deprecated Google OAuth is no longer used for login/backup. */
+export type GoogleOAuthConfig = {
+  webClientId: string;
+  iosClientId: string;
+  androidClientId: string;
+};
+
+/** Reads Google OAuth client IDs from Expo config / EXPO_PUBLIC_* env. */
+export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
+  const extra = readGoogleExtra();
+  const webClientId = (
+    process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+    extra.googleWebClientId ||
+    ''
+  ).trim();
+  if (!webClientId) return null;
+
+  const iosClientId = (
+    process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ||
+    extra.googleIosClientId ||
+    webClientId
+  ).trim();
+
+  const androidClientId = (
+    process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
+    extra.googleAndroidClientId ||
+    webClientId
+  ).trim();
+
+  return { webClientId, iosClientId, androidClientId };
+}
+
+export function isGoogleOAuthConfigured(): boolean {
+  return Boolean(getGoogleOAuthConfig()?.webClientId);
+}
+
 export function getGoogleWebClientId(): string | undefined {
-  return undefined;
+  return getGoogleOAuthConfig()?.webClientId;
 }

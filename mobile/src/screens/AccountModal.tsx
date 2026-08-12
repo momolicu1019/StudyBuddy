@@ -43,7 +43,7 @@ export function AccountModal({ visible, onClose }: Props) {
           <Text style={styles.sub}>
             {isSignedIn
               ? session?.user.email
-              : 'Studying offline — create an email account to manage PDF backups'}
+              : 'Studying offline — sign in with Google or email to manage PDF backups'}
           </Text>
         </View>
       </View>
@@ -92,8 +92,8 @@ export function AccountModal({ visible, onClose }: Props) {
         </View>
       ) : (
         <Text style={[styles.sub, { marginTop: 16 }]}>
-          Create an email account from the login screen to export and restore PDF
-          backups.
+          Sign in with Google or create an email account from the login screen to
+          export and restore PDF backups.
         </Text>
       )}
 

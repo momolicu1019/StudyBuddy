@@ -453,7 +453,7 @@ export function DashboardScreen() {
           </Card>
           <Card style={[styles.stat, { width: '100%' }]}>
             <Text style={styles.statValue}>{stats.focus_hours}h</Text>
-            <Text style={styles.statLabel}>This week's focus time</Text>
+            <Text style={styles.statLabel}>Total focus time</Text>
           </Card>
         </View>
 

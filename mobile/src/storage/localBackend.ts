@@ -501,6 +501,7 @@ export const localBackend = {
     }
 
     let created!: Deadline;
+    let all: Deadline[] = [];
     await updateLocalDb((db) => {
       created = {
         id: db.next_deadline_id,
@@ -511,27 +512,41 @@ export const localBackend = {
       };
       db.next_deadline_id += 1;
       db.deadlines.push(created);
+      all = [...db.deadlines];
     });
+    void import('./deadlineNotifications').then(({ syncDeadlineNotifications }) =>
+      syncDeadlineNotifications(all),
+    );
     return created;
   },
 
   async completeDeadline(id: number): Promise<Deadline> {
     let updated!: Deadline;
+    let all: Deadline[] = [];
     await updateLocalDb((db) => {
       const item = db.deadlines.find((d) => d.id === id);
       if (!item) throw new Error('Deadline not found');
       item.completed = true;
       updated = item;
+      all = [...db.deadlines];
     });
+    void import('./deadlineNotifications').then(({ syncDeadlineNotifications }) =>
+      syncDeadlineNotifications(all),
+    );
     return updated;
   },
 
   async deleteDeadline(id: number): Promise<void> {
+    let all: Deadline[] = [];
     await updateLocalDb((db) => {
       const before = db.deadlines.length;
       db.deadlines = db.deadlines.filter((d) => d.id !== id);
       if (db.deadlines.length === before) throw new Error('Deadline not found');
+      all = [...db.deadlines];
     });
+    void import('./deadlineNotifications').then(({ syncDeadlineNotifications }) =>
+      syncDeadlineNotifications(all),
+    );
   },
 
   async getTutorChats(): Promise<TutorChat[]> {

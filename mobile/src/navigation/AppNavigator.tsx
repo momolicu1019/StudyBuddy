@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -7,12 +7,17 @@ import {
   Text,
   View,
 } from 'react-native';
-import { NavigationContainer, useNavigation } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  createNavigationContainerRef,
+  useNavigation,
+} from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Notifications from 'expo-notifications';
 
 import { Toast } from '../components/ui';
 import { useApp } from '../context/AppContext';
@@ -30,11 +35,18 @@ import { QuizScreen } from '../screens/QuizScreen';
 import { StorageScreen } from '../screens/StorageScreen';
 import { StudyScreen } from '../screens/StudyScreen';
 import { TypeNotesScreen } from '../screens/TypeNotesScreen';
+import { isDeadlineNotificationResponse } from '../storage/deadlineNotifications';
 import { colors } from '../theme/colors';
 import type { MainTabParamList, RootStackParamList } from './types';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 const Stack = createNativeStackNavigator<RootStackParamList>();
+export const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+function openDeadlinesFromNotification() {
+  if (!navigationRef.isReady()) return;
+  navigationRef.navigate('Deadlines');
+}
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -185,6 +197,47 @@ export function AppNavigator() {
   const { toast } = useApp();
   const { ready, isSignedIn, skippedLogin } = useAuth();
   const showLogin = ready && !isSignedIn && !skippedLogin;
+  const pendingDeadlineTap = useRef(false);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    const responseSub = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const data = response.notification.request.content.data;
+        if (!isDeadlineNotificationResponse(data)) return;
+        if (navigationRef.isReady() && !showLogin) {
+          openDeadlinesFromNotification();
+        } else {
+          pendingDeadlineTap.current = true;
+        }
+      },
+    );
+
+    void Notifications.getLastNotificationResponseAsync().then((response) => {
+      const data = response?.notification.request.content.data;
+      if (!isDeadlineNotificationResponse(data)) return;
+      if (navigationRef.isReady() && !showLogin) {
+        openDeadlinesFromNotification();
+      } else {
+        pendingDeadlineTap.current = true;
+      }
+    });
+
+    return () => {
+      responseSub.remove();
+    };
+  }, [showLogin]);
+
+  useEffect(() => {
+    if (showLogin || !pendingDeadlineTap.current) return;
+    const timer = setTimeout(() => {
+      if (!pendingDeadlineTap.current) return;
+      pendingDeadlineTap.current = false;
+      openDeadlinesFromNotification();
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [showLogin, ready]);
 
   if (!ready) {
     return (
@@ -195,7 +248,7 @@ export function AppNavigator() {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <View style={{ flex: 1 }}>
         <Stack.Navigator
           key={showLogin ? 'auth' : 'app'}

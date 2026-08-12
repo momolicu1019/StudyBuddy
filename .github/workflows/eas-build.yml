@@ -60,12 +60,15 @@ jobs:
       - name: Resolve inputs
         id: resolve
         run: |
-          # Push builds Android only until iOS ad-hoc credentials exist on EAS.
+          # Push to main builds Android + iOS. Manual runs keep the chosen platform.
+          # iOS requires Apple/EAS ad-hoc credentials created once interactively:
+          #   cd mobile && npx eas-cli login && npx eas-cli device:create
+          #   npx eas-cli build --platform ios --profile preview
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "platform=${{ github.event.inputs.platform }}" >> "$GITHUB_OUTPUT"
             echo "profile=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
           else
-            echo "platform=android" >> "$GITHUB_OUTPUT"
+            echo "platform=all" >> "$GITHUB_OUTPUT"
             echo "profile=preview" >> "$GITHUB_OUTPUT"
           fi
         working-directory: .

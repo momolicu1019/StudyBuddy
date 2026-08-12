@@ -502,6 +502,12 @@ const styles = StyleSheet.create({
   },
   cardShell: {
     flex: 1,
+    borderRadius: 20,
+    shadowColor: '#251f4d',
+    shadowOpacity: 0.1,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
   },
   pageOverlay: {
     position: 'absolute',
@@ -513,17 +519,13 @@ const styles = StyleSheet.create({
   },
   flipScene: {
     flex: 1,
+    borderRadius: 20,
+    overflow: 'hidden',
   },
   face: {
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: colors.line,
+    borderWidth: 0,
     padding: 20,
-    shadowColor: '#251f4d',
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
     overflow: 'hidden',
     backfaceVisibility: 'hidden',
   },

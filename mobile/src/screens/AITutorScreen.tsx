@@ -18,6 +18,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api } from '../api/client';
 import type { DraftFlashcard } from '../api/types';
+import {
+  AiDraftReviewFlow,
+  type AiDraftPhase,
+} from '../components/AiDraftReviewFlow';
 import { AppModal, Card, PrimaryButton, SearchInput } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
@@ -95,6 +99,7 @@ export function AITutorScreen({ route }: Props) {
     question?: string;
   } | null>(null);
   const [draftCards, setDraftCards] = useState<DraftFlashcard[] | null>(null);
+  const [draftPhase, setDraftPhase] = useState<AiDraftPhase>('summary');
   const [makingCards, setMakingCards] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveFolderId, setSaveFolderId] = useState<number | null>(null);
@@ -160,6 +165,7 @@ export function AITutorScreen({ route }: Props) {
   function closeCardModal() {
     setCardSource(null);
     setDraftCards(null);
+    setDraftPhase('summary');
     setMakingCards(false);
     setSaving(false);
     setCreatingFolder(false);
@@ -320,6 +326,7 @@ export function AITutorScreen({ route }: Props) {
         return;
       }
       setDraftCards(result.cards);
+      setDraftPhase('summary');
     } catch (error) {
       showToast(friendlyAiError(error));
       closeCardModal();
@@ -570,115 +577,126 @@ export function AITutorScreen({ route }: Props) {
           closeCardModal();
         }}
       >
-        <Text style={styles.modalTitle}>
-          {makingCards ? 'Creating flashcards…' : 'Flashcards from tutor answer'}
-        </Text>
-        <Text style={[styles.sub, { marginTop: 8 }]}>
-          {makingCards
-            ? 'Turning this explanation into exam-review cards.'
-            : draftCards
-              ? `${draftCards.length} card${draftCards.length === 1 ? '' : 's'} ready to save.`
-              : 'Preparing cards…'}
-        </Text>
-
-        {draftCards?.[0] ? (
-          <View style={styles.sample}>
-            <Text style={styles.sampleLabel}>Sample</Text>
-            <Text style={styles.sampleTitle}>{draftCards[0].question}</Text>
-            <Text style={[styles.sub, { marginTop: 6 }]}>{draftCards[0].answer}</Text>
-          </View>
-        ) : null}
-
-        {!makingCards && draftCards ? (
+        {makingCards || !draftCards ? (
           <>
-            <Text style={[styles.sub, { marginTop: 16, marginBottom: 8, fontWeight: '700' }]}>
-              Save to subject
+            <Text style={styles.modalTitle}>
+              {makingCards ? 'Creating flashcards…' : 'Preparing cards…'}
             </Text>
-
-            {creatingFolder || subjects.length === 0 ? (
-              <View>
-                <Text style={styles.sub}>
-                  {subjects.length === 0
-                    ? 'No subjects yet. Create one to save these flashcards.'
-                    : 'Name your new subject.'}
+            <Text style={[styles.sub, { marginTop: 8 }]}>
+              Turning this explanation into exam-review cards.
+            </Text>
+          </>
+        ) : (
+          <AiDraftReviewFlow
+            cards={draftCards}
+            onChangeCards={(next) => setDraftCards(next)}
+            phase={draftPhase}
+            onPhaseChange={setDraftPhase}
+            onDiscard={closeCardModal}
+            subtitle="Review AI cards from this tutor answer before saving."
+            saveSlot={
+              <>
+                <Text
+                  style={[
+                    styles.sub,
+                    { marginTop: 16, marginBottom: 8, fontWeight: '700' },
+                  ]}
+                >
+                  Save to subject
                 </Text>
-                <SearchInput
-                  value={folderName}
-                  onChangeText={setFolderName}
-                  placeholder="e.g. Biology"
-                  style={styles.folderNameInput}
-                />
-                <View style={styles.subjectChips}>
-                  {FOLDER_ICONS.map((icon) => (
-                    <Pressable
-                      key={icon}
-                      onPress={() => setFolderIcon(icon)}
-                      style={[styles.chip, folderIcon === icon && styles.chipActive]}
-                    >
-                      <Text style={{ fontSize: 18 }}>{icon}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <View style={[styles.row, { marginTop: 12 }]}>
-                  {subjects.length > 0 ? (
-                    <PrimaryButton
-                      label="Back"
-                      variant="secondary"
-                      onPress={() => setCreatingFolder(false)}
-                      style={styles.flexBtn}
+
+                {creatingFolder || subjects.length === 0 ? (
+                  <View>
+                    <Text style={styles.sub}>
+                      {subjects.length === 0
+                        ? 'No subjects yet. Create one to save these flashcards.'
+                        : 'Name your new subject.'}
+                    </Text>
+                    <SearchInput
+                      value={folderName}
+                      onChangeText={setFolderName}
+                      placeholder="e.g. Biology"
+                      style={styles.folderNameInput}
                     />
-                  ) : null}
+                    <View style={styles.subjectChips}>
+                      {FOLDER_ICONS.map((icon) => (
+                        <Pressable
+                          key={icon}
+                          onPress={() => setFolderIcon(icon)}
+                          style={[
+                            styles.chip,
+                            folderIcon === icon && styles.chipActive,
+                          ]}
+                        >
+                          <Text style={{ fontSize: 18 }}>{icon}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    <View style={[styles.row, { marginTop: 12 }]}>
+                      {subjects.length > 0 ? (
+                        <PrimaryButton
+                          label="Back"
+                          variant="secondary"
+                          onPress={() => setCreatingFolder(false)}
+                          style={styles.flexBtn}
+                        />
+                      ) : null}
+                      <PrimaryButton
+                        label="Create subject"
+                        onPress={() => void createFolderInline()}
+                        style={styles.flexBtn}
+                      />
+                    </View>
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.subjectChips}>
+                      {subjects.map((s) => (
+                        <Pressable
+                          key={s.id}
+                          onPress={() => setSaveFolderId(s.id)}
+                          style={[
+                            styles.chip,
+                            saveFolderId === s.id && styles.chipActive,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.chipText,
+                              saveFolderId === s.id && styles.chipTextActive,
+                            ]}
+                          >
+                            {s.icon} {s.name}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    <PrimaryButton
+                      label="+ New subject"
+                      variant="secondary"
+                      onPress={() => setCreatingFolder(true)}
+                      style={{ marginTop: 10 }}
+                    />
+                  </>
+                )}
+
+                <View style={[styles.row, { marginTop: 20 }]}>
                   <PrimaryButton
-                    label="Create subject"
-                    onPress={() => void createFolderInline()}
+                    label="Discard"
+                    variant="secondary"
+                    onPress={closeCardModal}
                     style={styles.flexBtn}
                   />
+                  <PrimaryButton
+                    label={saving ? 'Saving…' : 'Save flashcards'}
+                    onPress={() => void onSaveCards()}
+                    style={{ flex: 1, opacity: saving ? 0.7 : 1 }}
+                  />
                 </View>
-              </View>
-            ) : (
-              <>
-                <View style={styles.subjectChips}>
-                  {subjects.map((s) => (
-                    <Pressable
-                      key={s.id}
-                      onPress={() => setSaveFolderId(s.id)}
-                      style={[styles.chip, saveFolderId === s.id && styles.chipActive]}
-                    >
-                      <Text
-                        style={[
-                          styles.chipText,
-                          saveFolderId === s.id && styles.chipTextActive,
-                        ]}
-                      >
-                        {s.icon} {s.name}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <PrimaryButton
-                  label="+ New subject"
-                  variant="secondary"
-                  onPress={() => setCreatingFolder(true)}
-                  style={{ marginTop: 10 }}
-                />
               </>
-            )}
-
-            <View style={[styles.row, { marginTop: 20 }]}>
-              <PrimaryButton
-                label="Discard"
-                variant="secondary"
-                onPress={closeCardModal}
-                style={styles.flexBtn}
-              />
-              <PrimaryButton
-                label={saving ? 'Saving…' : 'Save flashcards'}
-                onPress={() => void onSaveCards()}
-                style={{ flex: 1, opacity: saving ? 0.7 : 1 }}
-              />
-            </View>
-          </>
-        ) : null}
+            }
+          />
+        )}
       </AppModal>
     </KeyboardAvoidingView>
   );

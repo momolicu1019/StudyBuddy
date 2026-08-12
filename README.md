@@ -81,11 +81,31 @@ EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=your-android-client-id.apps.googleuserconte
 Google Cloud Console checklist:
 
 1. **APIs & Services → OAuth consent screen** — add your test users while the app is in Testing.
-2. **Credentials → Create credentials → OAuth client ID → Web application** — copy into `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`.
+2. **Credentials → Create credentials → OAuth client ID → Web application** — copy into `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` (must be type **Web**, not Android).
 3. **Credentials → OAuth client ID → Android**
    - Package name: `com.studybuddy.ai`
-   - SHA-1: from EAS (`eas credentials`) or your upload keystore (`keytool -list -v -keystore ...`)
-4. Rebuild after installing `@react-native-google-signin/google-signin` / changing env:
+   - SHA-1: fingerprint of the keystore that signed the APK you installed
+4. Rebuild only if you changed native deps / env baked into the binary. Fixing SHA-1 in Google Cloud does **not** require a rebuild — wait a few minutes and retry.
+
+#### Fix `DEVELOPER_ERROR` after picking a Google account
+
+That error means the Android OAuth client’s package/SHA-1 does not match the installed APK (or `webClientId` is not a Web client).
+
+For the current EAS **preview** APK (`studybuddy_v1.0.1.apk`), the signing SHA-1 is:
+
+```text
+1B:7E:FF:3F:71:E8:DF:49:92:77:0E:AF:FE:D7:E0:94:4D:08:B4:8E
+```
+
+Paste that into an Android OAuth client with package `com.studybuddy.ai`. To print the SHA-1 for any APK:
+
+```bash
+cd mobile
+npm run apk:sha1 -- /path/to/studybuddy.apk
+# or: eas credentials   # shows EAS-managed keystore fingerprints
+```
+
+Then rebuild if you need a fresh install:
 
 ```bash
 cd mobile

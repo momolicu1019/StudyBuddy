@@ -360,6 +360,12 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
         error && typeof error === 'object' && 'code' in error
           ? String((error as { code: unknown }).code)
           : '';
+      const rawMessage =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'string'
+            ? error
+            : '';
       if (code === googleMod?.statusCodes.IN_PROGRESS) {
         return { ok: false, message: 'Google sign-in is already in progress.' };
       }
@@ -369,12 +375,22 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
           message: 'Google Play Services is required for Google sign-in.',
         };
       }
+      // Android status 10 / DEVELOPER_ERROR = package name or SHA-1 mismatch
+      // in Google Cloud Console (or webClientId is not a Web client ID).
+      if (
+        code === '10' ||
+        /DEVELOPER_ERROR/i.test(rawMessage) ||
+        /Developer console is not set up correctly/i.test(rawMessage)
+      ) {
+        return {
+          ok: false,
+          message:
+            'Google Cloud setup needed: add an Android OAuth client for package com.studybuddy.ai with this app’s signing SHA-1 (see README / npm run apk:sha1). Also use a Web client ID in EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID — not the Android client ID.',
+        };
+      }
       return {
         ok: false,
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Could not sign in with Google. Please try again.',
+        message: rawMessage || 'Could not sign in with Google. Please try again.',
       };
     }
   }, [auth, googleMod]);

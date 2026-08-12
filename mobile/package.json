@@ -44,6 +44,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
+    "apk:sha1": "node scripts/apk-sha1.cjs",
     "build:preview": "eas build --profile preview --platform all",
     "build:production": "eas build --profile production --platform all"
   },

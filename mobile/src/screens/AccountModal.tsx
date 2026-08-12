@@ -13,9 +13,22 @@ type Props = {
 
 export function AccountModal({ visible, onClose }: Props) {
   const { refresh, showToast } = useApp();
-  const { session, isSignedIn, backupNow, restoreNow, signOut } = useAuth();
+  const {
+    session,
+    isSignedIn,
+    backupNow,
+    restoreNow,
+    syncUpToGoogle,
+    syncDownFromGoogle,
+    signOut,
+  } = useAuth();
   const initials = useAuthInitials();
   const [busy, setBusy] = useState(false);
+
+  const canGoogleSync =
+    isSignedIn &&
+    session?.user.provider === 'google' &&
+    session.user.isDemo === false;
 
   async function run(action: () => Promise<{ ok: boolean; message: string }>) {
     setBusy(true);
@@ -43,18 +56,42 @@ export function AccountModal({ visible, onClose }: Props) {
           <Text style={styles.sub}>
             {isSignedIn
               ? session?.user.email
-              : 'Studying offline — sign in with Google or email to manage PDF backups'}
+              : 'Studying offline — sign in with Google to sync or manage PDF backups'}
           </Text>
         </View>
       </View>
+
+      {canGoogleSync ? (
+        <View style={styles.meta}>
+          <Text style={styles.metaLabel}>Google Drive sync</Text>
+          <Text style={styles.metaValue}>
+            {session?.lastSyncedAt
+              ? `Last sync ${new Date(session.lastSyncedAt).toLocaleString()}`
+              : 'Keep folders & flashcards in your Google account'}
+          </Text>
+          <Text style={[styles.sub, { marginTop: 6 }]}>
+            Sync up uploads this account’s study data to a private Drive app
+            folder. Sync down replaces local data with the cloud copy.
+          </Text>
+          <View style={{ gap: 10, marginTop: 12 }}>
+            <PrimaryButton
+              label={busy ? 'Working…' : 'Sync up to Google'}
+              onPress={() => void run(syncUpToGoogle)}
+            />
+            <PrimaryButton
+              label={busy ? 'Working…' : 'Sync down from Google'}
+              variant="secondary"
+              onPress={() => void run(syncDownFromGoogle)}
+            />
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.meta}>
         <Text style={styles.metaLabel}>PDF backup</Text>
         <Text style={styles.metaValue}>
           {isSignedIn
-            ? session?.lastSyncedAt
-              ? `Last export ${new Date(session.lastSyncedAt).toLocaleString()}`
-              : 'Export subject folders as PDFs anytime'
+            ? 'Export subject folders as PDFs anytime'
             : 'Sign in to export or restore flashcard PDFs'}
         </Text>
         {isSignedIn ? (
@@ -69,6 +106,7 @@ export function AccountModal({ visible, onClose }: Props) {
         <View style={{ gap: 10, marginTop: 16 }}>
           <PrimaryButton
             label={busy ? 'Working…' : 'Backup now'}
+            variant="secondary"
             onPress={() => void run(backupNow)}
           />
           <PrimaryButton
@@ -93,8 +131,8 @@ export function AccountModal({ visible, onClose }: Props) {
         </View>
       ) : (
         <Text style={[styles.sub, { marginTop: 16 }]}>
-          Sign in with Google or create an email account from the login screen to
-          export and restore PDF backups.
+          Sign in with Google to sync with Drive, or create an email account for
+          PDF backups.
         </Text>
       )}
 

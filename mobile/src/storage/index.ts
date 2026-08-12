@@ -15,6 +15,12 @@ export {
   saveAuthState,
   signInLocalAccount,
 } from './cloud';
+export {
+  GOOGLE_DRIVE_APPDATA_SCOPE,
+  syncDownFromGoogleDrive,
+  syncUpToGoogleDrive,
+} from './googleDriveSync';
+export type { GoogleDriveSyncPayload } from './googleDriveSync';
 export type {
   GoogleUser,
   GoogleOAuthConfig,

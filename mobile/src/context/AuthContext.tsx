@@ -25,9 +25,21 @@ import {
   type CloudActionResult,
 } from '../storage/cloud';
 import {
+  GOOGLE_DRIVE_APPDATA_SCOPE,
+  syncDownFromGoogleDrive,
+  syncUpToGoogleDrive,
+} from '../storage/googleDriveSync';
+import {
   GUEST_STORAGE_SCOPE,
   setActiveStorageScope,
 } from '../storage/store';
+
+const GOOGLE_SIGNIN_SCOPES = [
+  'openid',
+  'profile',
+  'email',
+  GOOGLE_DRIVE_APPDATA_SCOPE,
+];
 
 type GoogleSignInModule = typeof import('@react-native-google-signin/google-signin');
 
@@ -63,6 +75,10 @@ type AuthContextValue = {
   signOut: () => Promise<void>;
   backupNow: () => Promise<CloudActionResult>;
   restoreNow: () => Promise<CloudActionResult>;
+  /** Upload this account's local data to Google Drive app data. */
+  syncUpToGoogle: () => Promise<CloudActionResult>;
+  /** Download Google Drive app data into this account's local storage. */
+  syncDownFromGoogle: () => Promise<CloudActionResult>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -244,6 +260,23 @@ function useAuthSession() {
     }
   }, [persist, session]);
 
+  const googleSyncUnavailable = useCallback(async (): Promise<CloudActionResult> => {
+    if (!session?.user) {
+      return { ok: false, message: 'Sign in with Google to sync.' };
+    }
+    if (session.user.provider !== 'google' || session.user.isDemo) {
+      return {
+        ok: false,
+        message:
+          'Google Drive sync needs a real Google sign-in (not email or demo Google).',
+      };
+    }
+    return {
+      ok: false,
+      message: 'Google Drive sync is unavailable in this build.',
+    };
+  }, [session]);
+
   return {
     ready,
     session,
@@ -257,6 +290,7 @@ function useAuthSession() {
     signOut,
     backupNow,
     restoreNow,
+    googleSyncUnavailable,
   };
 }
 
@@ -280,6 +314,8 @@ function LocalAuthProvider({ children }: { children: React.ReactNode }) {
       signOut: auth.signOut,
       backupNow: auth.backupNow,
       restoreNow: auth.restoreNow,
+      syncUpToGoogle: auth.googleSyncUnavailable,
+      syncDownFromGoogle: auth.googleSyncUnavailable,
     }),
     [
       auth.ready,
@@ -292,6 +328,7 @@ function LocalAuthProvider({ children }: { children: React.ReactNode }) {
       auth.signOut,
       auth.backupNow,
       auth.restoreNow,
+      auth.googleSyncUnavailable,
       googleSetupHint,
     ],
   );
@@ -315,9 +352,109 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
       webClientId: oauth.webClientId,
       iosClientId: oauth.iosClientId,
       offlineAccess: false,
-      scopes: ['openid', 'profile', 'email'],
+      scopes: GOOGLE_SIGNIN_SCOPES,
     });
   }, [googleMod, oauth.iosClientId, oauth.webClientId]);
+
+  const ensureDriveAccessToken = useCallback(async (): Promise<
+    CloudActionResult & { accessToken?: string }
+  > => {
+    if (!googleMod) {
+      return {
+        ok: false,
+        message: 'Google Sign-In is unavailable in this build.',
+      };
+    }
+    if (!auth.session?.user || auth.session.user.provider !== 'google') {
+      return { ok: false, message: 'Sign in with Google to sync with Drive.' };
+    }
+    if (auth.session.user.isDemo) {
+      return {
+        ok: false,
+        message: 'Google Drive sync needs a real Google account, not the demo session.',
+      };
+    }
+
+    try {
+      try {
+        await googleMod.GoogleSignin.addScopes({
+          scopes: [GOOGLE_DRIVE_APPDATA_SCOPE],
+        });
+      } catch {
+        // Scope may already be granted.
+      }
+      const tokens = await googleMod.GoogleSignin.getTokens();
+      if (!tokens.accessToken) {
+        return {
+          ok: false,
+          message: 'Could not get a Google access token. Sign out and sign in again.',
+        };
+      }
+      if (tokens.accessToken !== auth.session.user.accessToken) {
+        await auth.persist({
+          session: {
+            ...auth.session,
+            user: { ...auth.session.user, accessToken: tokens.accessToken },
+          },
+          skippedLogin: false,
+        });
+      }
+      return { ok: true, message: 'ok', accessToken: tokens.accessToken };
+    } catch (error) {
+      return {
+        ok: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Could not authorize Google Drive. Try signing in again.',
+      };
+    }
+  }, [auth, googleMod]);
+
+  const syncUpToGoogle = useCallback(async () => {
+    const tokenResult = await ensureDriveAccessToken();
+    if (!tokenResult.ok || !tokenResult.accessToken || !auth.session?.user) {
+      return {
+        ok: false,
+        message: tokenResult.message || 'Google Drive authorization failed.',
+      };
+    }
+    const result = await syncUpToGoogleDrive(
+      auth.session.user,
+      tokenResult.accessToken,
+    );
+    if (result.ok) {
+      await auth.persist({
+        session: {
+          ...auth.session,
+          lastSyncedAt: result.lastSyncedAt ?? new Date().toISOString(),
+        },
+        skippedLogin: false,
+      });
+    }
+    return result;
+  }, [auth, ensureDriveAccessToken]);
+
+  const syncDownFromGoogle = useCallback(async () => {
+    const tokenResult = await ensureDriveAccessToken();
+    if (!tokenResult.ok || !tokenResult.accessToken || !auth.session?.user) {
+      return {
+        ok: false,
+        message: tokenResult.message || 'Google Drive authorization failed.',
+      };
+    }
+    const result = await syncDownFromGoogleDrive(tokenResult.accessToken);
+    if (result.ok) {
+      await auth.persist({
+        session: {
+          ...auth.session,
+          lastSyncedAt: result.lastSyncedAt ?? new Date().toISOString(),
+        },
+        skippedLogin: false,
+      });
+    }
+    return result;
+  }, [auth, ensureDriveAccessToken]);
 
   const signInWithGoogle = useCallback(async () => {
     try {
@@ -420,6 +557,8 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
       signOut: auth.signOut,
       backupNow: auth.backupNow,
       restoreNow: auth.restoreNow,
+      syncUpToGoogle,
+      syncDownFromGoogle,
     }),
     [
       auth.ready,
@@ -432,6 +571,8 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
       auth.backupNow,
       auth.restoreNow,
       signInWithGoogle,
+      syncUpToGoogle,
+      syncDownFromGoogle,
     ],
   );
 

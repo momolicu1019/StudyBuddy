@@ -30,6 +30,7 @@ On-device code lives in `mobile/src/storage/`. Sign in is optional via the login
 
 - Optional **Continue with Google** or email login
 - **Per-account on-device data** — each Google/email login keeps its own folders, flashcards, and progress on this device
+- **Google Drive sync** — Sync up / Sync down from the profile menu (private Drive app data)
 - Dashboard with note upload (PDF / photo) → generate flashcards → save to a folder
 - Subject folders (create, rename, delete, search)
 - Flashcard study mode
@@ -63,10 +64,11 @@ Then press:
 
 1. On first launch, choose **Continue with Google**, create an email account, or **Continue without an account**.
 2. Study content (folders, flashcards, progress, sources) is stored **per account on this device**. Sign in with Google A, then Google B → each sees only their own data. Guest / skip-login uses a separate guest profile.
-3. Tap the avatar (top right) anytime to manage PDF **Backup now** / **Restore**, or sign out.
-4. **Expo Go** cannot run real Google Sign-In (Google blocks the old browser OAuth redirect). Use an EAS **development** or **preview** build.
-5. Without Google Cloud credentials (or without a native build), the app uses a **demo Google session** so you can exercise the UI on-device.
-6. For real Google Sign-In, copy `mobile/.env.example` → `mobile/.env` and configure Google Cloud:
+3. From the avatar menu, Google accounts can **Sync up to Google** / **Sync down from Google** (private Drive app-data folder). PDF **Backup now** / **Restore** remain available as file exports.
+4. Tap the avatar (top right) anytime to manage sync, PDF backup, or sign out.
+5. **Expo Go** cannot run real Google Sign-In (Google blocks the old browser OAuth redirect). Use an EAS **development** or **preview** build.
+6. Without Google Cloud credentials (or without a native build), the app uses a **demo Google session** so you can exercise the UI on-device.
+7. For real Google Sign-In, copy `mobile/.env.example` → `mobile/.env` and configure Google Cloud:
 
 ```bash
 # Required — OAuth client type "Web application"
@@ -82,12 +84,14 @@ EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=your-android-client-id.apps.googleuserconte
 
 Google Cloud Console checklist:
 
-1. **APIs & Services → OAuth consent screen** — add your test users while the app is in Testing.
+1. **APIs & Services → OAuth consent screen** — add your test users while the app is in Testing. Include the Drive scope `https://www.googleapis.com/auth/drive.appdata` (used for Sync up / Sync down).
 2. **Credentials → Create credentials → OAuth client ID → Web application** — copy into `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` (must be type **Web**, not Android).
 3. **Credentials → OAuth client ID → Android**
    - Package name: `com.studybuddy.ai`
    - SHA-1: fingerprint of the keystore that signed the APK you installed
 4. Rebuild only if you changed native deps / env baked into the binary. Fixing SHA-1 in Google Cloud does **not** require a rebuild — wait a few minutes and retry.
+
+Google Drive sync stores a private app-data backup (folders, flashcards, progress, and source files under 12MB each). Sync down **replaces** local data for the signed-in account.
 
 #### Fix `DEVELOPER_ERROR` after picking a Google account
 

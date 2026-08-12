@@ -169,11 +169,16 @@ function normalizeCorrectIndex(
   return 0;
 }
 
-function kindFromRow(row: Record<string, unknown>, fallback: QuizQuestionKind): QuizQuestionKind {
-  const raw = String(row.kind ?? row.type ?? fallback)
+function kindFromRow(
+  row: Record<string, unknown>,
+  fallback: QuizQuestionKind | null,
+): QuizQuestionKind | null {
+  const hasExplicit = row.kind != null || row.type != null;
+  const raw = String(hasExplicit ? (row.kind ?? row.type) : (fallback ?? ''))
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
+  if (!raw) return fallback;
   if (
     raw === 'multiple_choice' ||
     raw === 'mcq' ||
@@ -196,7 +201,8 @@ function kindFromRow(row: Record<string, unknown>, fallback: QuizQuestionKind): 
 export function parseGeminiQuizQuestions(
   raw: string,
   size: number = QUIZ_SIZE,
-  defaultKind: QuizQuestionKind = 'multiple_choice',
+  defaultKind: QuizQuestionKind | null = 'multiple_choice',
+  allowedKinds?: QuizQuestionKind[],
 ): QuizQuestion[] {
   const parsed = parseJsonPayload(raw);
   if (!parsed) return [];
@@ -209,11 +215,18 @@ export function parseGeminiQuizQuestions(
       ? (parsed as { questions: unknown[] }).questions
       : [];
 
+  const allowed =
+    allowedKinds && allowedKinds.length
+      ? new Set<QuizQuestionKind>(allowedKinds)
+      : null;
+
   const questions: QuizQuestion[] = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const row = item as Record<string, unknown>;
     const kind = kindFromRow(row, defaultKind);
+    if (!kind) continue;
+    if (allowed && !allowed.has(kind)) continue;
     const question = String(row.question ?? row.stem ?? row.prompt ?? '').trim();
     const topic = String(row.topic ?? row.concept ?? '').trim() || undefined;
     const correctText = String(
@@ -470,6 +483,8 @@ function promptForQuizType(quizType: QuizType, count: number): string {
       return [
         ...base,
         'Mix kinds across the set: multiple_choice, typed_answer, true_false, and fill_blank.',
+        'Every question MUST include an explicit kind from that list.',
+        'Include at least one question of each kind when the count allows.',
         'For multiple_choice: 4 options + correct_index.',
         'For true_false: options ["True","False"] + correct_index.',
         'For typed_answer and fill_blank: correct_text required; options empty.',
@@ -477,8 +492,24 @@ function promptForQuizType(quizType: QuizType, count: number): string {
   }
 }
 
+function localFallback(
+  cards: Flashcard[],
+  targetSize: number,
+  quizType: QuizType,
+  error?: string,
+): { questions: QuizQuestion[]; usedAi: boolean; error?: string } {
+  return {
+    questions: buildQuizQuestions(cards, targetSize, quizType),
+    usedAi: false,
+    error,
+  };
+}
+
 /**
- * Ask Gemini (or local fallback) to create quiz questions for a quiz type.
+ * AI-first quiz generation for every quiz type.
+ * Sends the selected quiz type + flashcard notes to the model.
+ * Only if AI is unavailable / fails / returns too few matching questions
+ * do we fall back to building the quiz locally from analyzed cards.
  */
 export async function buildQuizQuestionsViaGemini(
   cards: Flashcard[],
@@ -490,21 +521,28 @@ export async function buildQuizQuestionsViaGemini(
   }
 
   const targetSize = Math.min(size, Math.max(1, cards.length * 2));
+  const allowedKinds = kindsForQuizType(quizType);
+  // Mixed quizzes must include an explicit kind per question; single-type
+  // quizzes can default missing kind to the selected type.
+  const defaultKind = quizType === 'mixed' ? null : allowedKinds[0];
 
   if (!isAiConfigured()) {
-    return {
-      questions: buildQuizQuestions(cards, targetSize, quizType),
-      usedAi: false,
-    };
+    return localFallback(
+      cards,
+      targetSize,
+      quizType,
+      'AI isn’t set up — built quiz from your flashcards',
+    );
   }
 
   const count = Math.min(targetSize, Math.max(5, Math.min(20, cards.length * 2)));
-  const defaultKind = kindsForQuizType(quizType)[0];
 
   try {
     const system = promptForQuizType(quizType, count);
     const user = [
       `Create ${count} ${quizType.replace(/_/g, ' ')} questions from these study notes:`,
+      `Quiz type: ${quizType}`,
+      `Allowed question kinds: ${allowedKinds.join(', ')}`,
       '',
       cardsToPromptBlock(cards),
     ].join('\n');
@@ -520,21 +558,28 @@ export async function buildQuizQuestionsViaGemini(
           temperature: 0.55,
         });
 
-    const questions = parseGeminiQuizQuestions(raw, targetSize, defaultKind);
+    const questions = parseGeminiQuizQuestions(
+      raw,
+      targetSize,
+      defaultKind,
+      allowedKinds,
+    );
     if (questions.length >= Math.min(5, count, targetSize)) {
       return { questions: questions.slice(0, targetSize), usedAi: true };
     }
 
-    return {
-      questions: buildQuizQuestions(cards, targetSize, quizType),
-      usedAi: false,
-      error: 'AI returned too few quiz questions',
-    };
+    return localFallback(
+      cards,
+      targetSize,
+      quizType,
+      'AI returned too few quiz questions — built quiz from your flashcards',
+    );
   } catch (error) {
-    return {
-      questions: buildQuizQuestions(cards, targetSize, quizType),
-      usedAi: false,
-      error: friendlyAiError(error),
-    };
+    return localFallback(
+      cards,
+      targetSize,
+      quizType,
+      `${friendlyAiError(error)} Built quiz from your flashcards.`,
+    );
   }
 }

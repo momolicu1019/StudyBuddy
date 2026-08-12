@@ -113,18 +113,25 @@ export function QuizScreen({ route, navigation }: Props) {
     setAnswers({});
     setIndex(0);
     try {
-      showToast(`Creating ${activeType.label.toLowerCase()} quiz…`);
+      showToast(`Creating ${activeType.label.toLowerCase()} quiz with AI…`);
       const data = await api.getQuiz(selectedIds, {
         quizType,
         size: questionCount,
       });
-      if (!data.length) {
-        showToast('No quiz questions could be generated');
+      if (!data.questions.length) {
+        showToast(data.error || 'No quiz questions could be generated');
         return;
       }
-      setQuestions(data);
+      setQuestions(data.questions);
       setPhase('quiz');
-      showToast(`${data.length} questions ready`);
+      if (data.usedAi) {
+        showToast(`${data.questions.length} AI questions ready`);
+      } else {
+        showToast(
+          data.error ||
+            `${data.questions.length} questions built from your flashcards`,
+        );
+      }
     } catch (error) {
       const detail =
         error instanceof Error ? error.message : 'Could not start quiz. Try again.';

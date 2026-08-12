@@ -274,7 +274,11 @@ export const localBackend = {
   async getQuiz(
     subjectId: number | number[],
     options?: { quizType?: QuizType; size?: number },
-  ): Promise<QuizQuestion[]> {
+  ): Promise<{
+    questions: QuizQuestion[];
+    usedAi: boolean;
+    error?: string;
+  }> {
     const { buildQuizQuestionsViaGemini } = await import('./quizBuilder');
     const db = await loadLocalDb();
     const ids = (Array.isArray(subjectId) ? subjectId : [subjectId]).filter(
@@ -283,12 +287,14 @@ export const localBackend = {
     if (!ids.length) throw new Error('Subject not found');
 
     const cards = ids.flatMap((id) => db.flashcards[String(id)] ?? []);
-    if (!cards.length) return [];
+    if (!cards.length) {
+      return { questions: [], usedAi: false, error: 'No flashcards available' };
+    }
 
     const quizType = options?.quizType ?? 'multiple_choice';
     const size = options?.size ?? 10;
-    const result = await buildQuizQuestionsViaGemini(cards, size, quizType);
-    return result.questions;
+    // Always try AI for the selected quiz type first; local card fallback only on failure.
+    return buildQuizQuestionsViaGemini(cards, size, quizType);
   },
 
   async submitQuiz(

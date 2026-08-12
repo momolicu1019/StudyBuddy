@@ -23,8 +23,8 @@ import { colors } from '../theme/colors';
 type Props = NativeStackScreenProps<RootStackParamList, 'Study'>;
 
 const SWIPE_THRESHOLD = 56;
-const FLIP_SPRING = { friction: 8, tension: 58, useNativeDriver: true as const };
 const PAGE_MS = 440;
+const FLIP_HALF_MS = 155;
 
 type PageTurn = {
   card: Flashcard;
@@ -116,67 +116,48 @@ function FlipCard({
 }) {
   const keyConcept = normalizeKeyPointTitle(card.question || '', card.answer);
 
-  const frontRotate = flipAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '180deg'],
-  });
-  const backRotate = flipAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['180deg', '360deg'],
-  });
-  const frontOpacity = flipAnim.interpolate({
-    inputRange: [0, 0.5, 0.5, 1],
-    outputRange: [1, 1, 0, 0],
-  });
-  const backOpacity = flipAnim.interpolate({
-    inputRange: [0, 0.5, 0.5, 1],
-    outputRange: [0, 0, 1, 1],
+  // Half-flip: 0 → 0.5 folds to edge, 0.5 → 1 (or 0) opens the other face.
+  // Keeps a single opaque white surface so the gray study bg never shows through.
+  const rotateY = flipAnim.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: ['0deg', '90deg', '0deg'],
   });
 
   return (
     <View style={styles.flipScene}>
       <Animated.View
-        pointerEvents={flipped ? 'none' : 'auto'}
         style={[
           styles.face,
-          styles.faceFront,
-          styles.faceLayer,
+          flipped ? styles.faceBack : styles.faceFront,
+          styles.faceFill,
           {
-            opacity: frontOpacity,
-            transform: [{ perspective: 1400 }, { rotateY: frontRotate }],
+            transform: [{ perspective: 1400 }, { rotateY }],
           },
         ]}
       >
-        <Text style={styles.label}>Key concept</Text>
-        <FrontFaceContent keyConcept={keyConcept} onReveal={onToggle} />
-        <PrimaryButton
-          label="Show explanation"
-          variant="secondary"
-          onPress={onToggle}
-          style={{ marginTop: 12 }}
-        />
-      </Animated.View>
-
-      <Animated.View
-        pointerEvents={flipped ? 'auto' : 'none'}
-        style={[
-          styles.face,
-          styles.faceBack,
-          styles.faceLayer,
-          {
-            opacity: backOpacity,
-            transform: [{ perspective: 1400 }, { rotateY: backRotate }],
-          },
-        ]}
-      >
-        <Text style={styles.label}>Explanation</Text>
-        <BackFaceContent answer={card.answer || ''} onReveal={onToggle} />
-        <PrimaryButton
-          label="Show key concept"
-          variant="secondary"
-          onPress={onToggle}
-          style={{ marginTop: 12 }}
-        />
+        {flipped ? (
+          <>
+            <Text style={styles.label}>Explanation</Text>
+            <BackFaceContent answer={card.answer || ''} onReveal={onToggle} />
+            <PrimaryButton
+              label="Show key concept"
+              variant="secondary"
+              onPress={onToggle}
+              style={{ marginTop: 12 }}
+            />
+          </>
+        ) : (
+          <>
+            <Text style={styles.label}>Key concept</Text>
+            <FrontFaceContent keyConcept={keyConcept} onReveal={onToggle} />
+            <PrimaryButton
+              label="Show explanation"
+              variant="secondary"
+              onPress={onToggle}
+              style={{ marginTop: 12 }}
+            />
+          </>
+        )}
       </Animated.View>
     </View>
   );
@@ -210,12 +191,15 @@ export function StudyScreen({ route, navigation }: Props) {
   const indexRef = useRef(0);
   const cardsRef = useRef<Flashcard[]>([]);
   const markingRef = useRef<Set<number>>(new Set());
+  const flippedRef = useRef(false);
   const navLockRef = useRef(false);
+  const flipLockRef = useRef(false);
   const flipAnim = useRef(new Animated.Value(0)).current;
   const pageAnim = useRef(new Animated.Value(0)).current;
 
   indexRef.current = index;
   cardsRef.current = cards;
+  flippedRef.current = flipped;
 
   useEffect(() => {
     let alive = true;
@@ -230,6 +214,7 @@ export function StudyScreen({ route, navigation }: Props) {
           setPageTurn(null);
           pageAnim.setValue(0);
           navLockRef.current = false;
+          flipLockRef.current = false;
           setError(null);
         }
       } catch {
@@ -273,15 +258,37 @@ export function StudyScreen({ route, navigation }: Props) {
   );
 
   const revealExplanation = useCallback(() => {
-    if (navLockRef.current) return;
-    setFlipped((wasFlipped) => {
-      const next = !wasFlipped;
-      Animated.spring(flipAnim, { ...FLIP_SPRING, toValue: next ? 1 : 0 }).start();
+    if (navLockRef.current || flipLockRef.current) return;
+
+    const wasFlipped = flippedRef.current;
+    const next = !wasFlipped;
+    flipLockRef.current = true;
+
+    Animated.timing(flipAnim, {
+      toValue: 0.5,
+      duration: FLIP_HALF_MS,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) {
+        flipLockRef.current = false;
+        return;
+      }
+
+      setFlipped(next);
       if (!wasFlipped && next) {
         const cardId = cardsRef.current[indexRef.current]?.id;
         if (cardId != null) void markCardMastered(cardId);
       }
-      return next;
+
+      Animated.timing(flipAnim, {
+        toValue: next ? 1 : 0,
+        duration: FLIP_HALF_MS,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start(() => {
+        flipLockRef.current = false;
+      });
     });
   }, [flipAnim, markCardMastered]);
 
@@ -292,6 +299,7 @@ export function StudyScreen({ route, navigation }: Props) {
       if (!leaving) return;
 
       navLockRef.current = true;
+      flipLockRef.current = false;
       setFlipped(false);
       flipAnim.setValue(0);
       setPageTurn({ card: leaving, direction });
@@ -340,6 +348,7 @@ export function StudyScreen({ route, navigation }: Props) {
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gesture) =>
           !navLockRef.current &&
+          !flipLockRef.current &&
           Math.abs(gesture.dx) > 12 &&
           Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
         onPanResponderRelease: (_, gesture) => {
@@ -360,19 +369,15 @@ export function StudyScreen({ route, navigation }: Props) {
 
   const turningRotate = pageAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: isNextTurn ? ['0deg', '-105deg'] : ['0deg', '105deg'],
+    outputRange: isNextTurn ? ['0deg', '-95deg'] : ['0deg', '95deg'],
   });
   const turningOpacity = pageAnim.interpolate({
-    inputRange: [0, 0.72, 1],
-    outputRange: [1, 0.55, 0],
+    inputRange: [0, 0.85, 1],
+    outputRange: [1, 1, 0],
   });
   const incomingScale = pageAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0.94, 1],
-  });
-  const incomingOpacity = pageAnim.interpolate({
-    inputRange: [0, 0.25, 1],
-    outputRange: [0.65, 0.9, 1],
+    outputRange: [0.97, 1],
   });
 
   if (loading) {
@@ -433,7 +438,6 @@ export function StudyScreen({ route, navigation }: Props) {
             styles.cardShell,
             pageTurn
               ? {
-                  opacity: incomingOpacity,
                   transform: [{ scale: incomingScale }],
                 }
               : undefined,
@@ -503,6 +507,7 @@ const styles = StyleSheet.create({
   cardShell: {
     flex: 1,
     borderRadius: 20,
+    backgroundColor: colors.card,
     shadowColor: '#251f4d',
     shadowOpacity: 0.1,
     shadowRadius: 18,
@@ -520,27 +525,22 @@ const styles = StyleSheet.create({
   flipScene: {
     flex: 1,
     borderRadius: 20,
-    overflow: 'hidden',
+    backgroundColor: colors.card,
   },
   face: {
     borderRadius: 20,
     borderWidth: 0,
     padding: 20,
-    overflow: 'hidden',
-    backfaceVisibility: 'hidden',
+    backgroundColor: colors.card,
   },
   faceFront: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.card,
   },
   faceBack: {
-    backgroundColor: colors.purpleTint,
+    backgroundColor: colors.card,
   },
-  faceLayer: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
+  faceFill: {
+    flex: 1,
   },
   staticPage: {
     flex: 1,

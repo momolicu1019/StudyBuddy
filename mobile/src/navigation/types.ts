@@ -6,6 +6,7 @@ export type RootStackParamList = {
   AITutor: { subject?: string };
   Flashcards: undefined;
   TypeNotes: undefined;
+  Progress: undefined;
   Deadlines: undefined;
   Pomodoro: undefined;
 };

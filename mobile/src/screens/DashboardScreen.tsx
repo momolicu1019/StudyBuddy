@@ -375,6 +375,14 @@ export function DashboardScreen() {
               highlight: deadlineSectionUrgency,
             },
             {
+              icon: '📊',
+              title: 'My Progress',
+              desc: 'Weekly study chart, quiz accuracy, and subject strengths.',
+              onPress: () => navigation.navigate('Progress'),
+              showBulb: false,
+              highlight: null as NearingUrgency | null,
+            },
+            {
               icon: '✨',
               title: 'AI Tutor',
               desc: 'Pick a help mode — explain, hint, quiz, or learn without the answer.',
@@ -423,15 +431,18 @@ export function DashboardScreen() {
         <Text style={[styles.h2, { marginTop: 8, marginBottom: 14 }]}>
           Your study progress
         </Text>
+        <Pressable onPress={() => navigation.navigate('Progress')}>
+          <Text style={styles.progressLink}>📊 View My Progress ›</Text>
+        </Pressable>
         {!hasProgress ? (
-          <Card style={{ marginBottom: 8 }}>
+          <Card style={{ marginBottom: 8, marginTop: 10 }}>
             <Text style={styles.sub}>
               Progress appears after you upload notes, study flashcards, take a quiz,
               or finish a focus session.
             </Text>
           </Card>
         ) : null}
-        <View style={styles.stats}>
+        <View style={[styles.stats, !hasProgress ? null : { marginTop: 10 }]}>
           <Card style={styles.stat}>
             <Text style={styles.statValue}>{stats.flashcards_reviewed}</Text>
             <Text style={styles.statLabel}>Flashcards reviewed</Text>
@@ -445,6 +456,13 @@ export function DashboardScreen() {
             <Text style={styles.statLabel}>This week's focus time</Text>
           </Card>
         </View>
+
+        <PrimaryButton
+          label="📊 Open My Progress"
+          variant="secondary"
+          onPress={() => navigation.navigate('Progress')}
+          style={{ marginTop: 12, alignSelf: 'stretch' }}
+        />
 
         <Card style={{ marginTop: 16, marginBottom: 30 }}>
           <Text style={styles.h2}>Focus session</Text>
@@ -624,6 +642,12 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   h2: { fontSize: 20, fontWeight: '800', color: colors.ink, margin: 0 },
+  progressLink: {
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 14,
+    marginBottom: 4,
+  },
   sub: { color: colors.muted, fontSize: 14, lineHeight: 20 },
   subCenter: {
     color: colors.muted,

@@ -29,6 +29,11 @@ import { loadLocalDb, updateLocalDb } from './store';
 import { generateFlashcardsViaGeminiPipeline } from './studyPipeline';
 import type { TutorMode } from './tutorModes';
 import type { QuizType } from './quizTypes';
+import {
+  bumpActivityDay,
+  buildProgressAnalytics,
+  type ProgressAnalytics,
+} from './progressAnalytics';
 
 const MAX_TUTOR_CHATS = 40;
 
@@ -232,6 +237,7 @@ export const localBackend = {
       // Count a review only when mastery state actually changes.
       if (changed) {
         db.progress.flashcards_reviewed += 1;
+        bumpActivityDay(db, { cards_reviewed: 1 });
       }
 
       flashcard = { ...card };
@@ -352,6 +358,7 @@ export const localBackend = {
       if (taken === 0) db.progress.quiz_average = percentage;
       else db.progress.quiz_average = Math.round((db.progress.quiz_average + percentage) / 2);
       db.progress.quizzes_taken = taken + 1;
+      bumpActivityDay(db, { quizzes_taken: 1 });
 
       db.quizzes.push({
         id: db.quizzes.length + 1,
@@ -382,11 +389,18 @@ export const localBackend = {
   async logFocus(minutes: number): Promise<Stats> {
     let stats!: Stats;
     await updateLocalDb((db) => {
+      const mins = Math.max(0, Math.round(minutes));
       db.progress.focus_hours =
-        Math.round((db.progress.focus_hours + minutes / 60) * 10) / 10;
+        Math.round((db.progress.focus_hours + mins / 60) * 10) / 10;
+      bumpActivityDay(db, { focus_minutes: mins });
       stats = publicStats(db.progress);
     });
     return stats;
+  },
+
+  async getProgressAnalytics(): Promise<ProgressAnalytics> {
+    const db = await loadLocalDb();
+    return buildProgressAnalytics(db);
   },
 
   async askTutor(

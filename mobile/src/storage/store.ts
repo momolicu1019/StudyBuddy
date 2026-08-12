@@ -1,8 +1,26 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { EMPTY_LOCAL_DB, type LocalDatabase, type TutorChat } from './schema';
+import { EMPTY_LOCAL_DB, type ActivityDay, type LocalDatabase, type TutorChat } from './schema';
 
 const STORAGE_KEY = 'studybuddy.local.v1';
+
+function normalizeActivityDays(
+  raw: LocalDatabase['activity_days'] | null | undefined,
+): Record<string, ActivityDay> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, ActivityDay> = {};
+  for (const [date, value] of Object.entries(raw)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !value || typeof value !== 'object') {
+      continue;
+    }
+    out[date] = {
+      focus_minutes: Number(value.focus_minutes) || 0,
+      cards_reviewed: Number(value.cards_reviewed) || 0,
+      quizzes_taken: Number(value.quizzes_taken) || 0,
+    };
+  }
+  return out;
+}
 
 function normalizeTutorChat(raw: Partial<TutorChat>): TutorChat | null {
   if (typeof raw.id !== 'number') return null;
@@ -63,6 +81,7 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
     quizzes: raw.quizzes ?? [],
     deadlines: Array.isArray(raw.deadlines) ? raw.deadlines : [],
     tutor_chats: tutorChats,
+    activity_days: normalizeActivityDays(raw.activity_days),
     settings: {
       cloud_sync_enabled: raw.settings?.cloud_sync_enabled ?? false,
       daily_goal_minutes: raw.settings?.daily_goal_minutes ?? 25,

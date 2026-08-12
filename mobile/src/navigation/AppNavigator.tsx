@@ -25,6 +25,7 @@ import { DeadlinesScreen } from '../screens/DeadlinesScreen';
 import { FlashcardsScreen } from '../screens/FlashcardsScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { PomodoroScreen } from '../screens/PomodoroScreen';
+import { ProgressScreen } from '../screens/ProgressScreen';
 import { QuizScreen } from '../screens/QuizScreen';
 import { StudyScreen } from '../screens/StudyScreen';
 import { TypeNotesScreen } from '../screens/TypeNotesScreen';
@@ -226,6 +227,11 @@ export function AppNavigator() {
                 name="TypeNotes"
                 component={TypeNotesScreen}
                 options={{ title: 'Type Notes' }}
+              />
+              <Stack.Screen
+                name="Progress"
+                component={ProgressScreen}
+                options={{ title: 'My Progress' }}
               />
               <Stack.Screen
                 name="Study"

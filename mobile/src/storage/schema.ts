@@ -1,6 +1,13 @@
 import type { DraftFlashcard, Flashcard, Stats, Subject } from '../api/types';
 import type { SourceKind } from './sourceMime';
 
+/** Per-calendar-day study activity for weekly analytics charts. */
+export type ActivityDay = {
+  focus_minutes: number;
+  cards_reviewed: number;
+  quizzes_taken: number;
+};
+
 /** On-device database — primary Study Buddy storage (local-first). */
 export type LocalDatabase = {
   subjects: Subject[];
@@ -12,6 +19,8 @@ export type LocalDatabase = {
   deadlines: Deadline[];
   /** Saved AI Tutor conversations the student can reopen. */
   tutor_chats: TutorChat[];
+  /** YYYY-MM-DD → daily study activity for analytics. */
+  activity_days: Record<string, ActivityDay>;
   settings: AppSettings;
   next_subject_id: number;
   next_card_id: number;
@@ -86,6 +95,8 @@ export const EMPTY_LOCAL_DB: LocalDatabase = {
   quizzes: [],
   deadlines: [],
   tutor_chats: [],
+  /** YYYY-MM-DD → activity totals */
+  activity_days: {},
   settings: {
     cloud_sync_enabled: false,
     daily_goal_minutes: 25,

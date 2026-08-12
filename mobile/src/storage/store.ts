@@ -71,7 +71,14 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
   return {
     subjects: raw.subjects ?? [],
     flashcards: raw.flashcards ?? {},
-    pdfs: raw.pdfs ?? [],
+    pdfs: Array.isArray(raw.pdfs)
+      ? raw.pdfs.map((p) => ({
+          ...p,
+          keep: p.keep === true,
+          used_for_flashcards: p.used_for_flashcards === true,
+          bytes: typeof p.bytes === 'number' ? p.bytes : undefined,
+        }))
+      : [],
     progress: {
       flashcards_reviewed: raw.progress?.flashcards_reviewed ?? 0,
       quiz_average: raw.progress?.quiz_average ?? 0,
@@ -85,6 +92,8 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
     settings: {
       cloud_sync_enabled: raw.settings?.cloud_sync_enabled ?? false,
       daily_goal_minutes: raw.settings?.daily_goal_minutes ?? 25,
+      delete_sources_after_flashcards:
+        raw.settings?.delete_sources_after_flashcards ?? false,
     },
     next_subject_id: raw.next_subject_id ?? 1,
     next_card_id: raw.next_card_id ?? 1,

@@ -251,7 +251,9 @@ export function DashboardScreen() {
 
     setSaving(true);
     try {
-      const result = await saveDraftFlashcards(saveFolderId, draftCards);
+      const result = await saveDraftFlashcards(saveFolderId, draftCards, {
+        sourceId: draftMeta?.source_id,
+      });
       setSavedSubject(result.subject);
       clearDraft();
       showToast(result.message);
@@ -379,6 +381,14 @@ export function DashboardScreen() {
               title: 'My Progress',
               desc: 'Weekly study chart, quiz accuracy, and subject strengths.',
               onPress: () => navigation.navigate('Progress'),
+              showBulb: false,
+              highlight: null as NearingUrgency | null,
+            },
+            {
+              icon: '💾',
+              title: 'Storage',
+              desc: 'See what uses space and manage uploaded files.',
+              onPress: () => navigation.navigate('Storage'),
               showBulb: false,
               highlight: null as NearingUrgency | null,
             },

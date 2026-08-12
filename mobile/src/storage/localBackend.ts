@@ -22,7 +22,7 @@ import type {
 } from '../api/types';
 import { formatExplanationAsBullets, normalizeKeyPointTitle } from './explanationFormat';
 import { persistSourceFile } from './pdfs';
-import type { Deadline, TutorChat, TutorChatMessage } from './schema';
+import type { AppSettings, Deadline, TutorChat, TutorChatMessage } from './schema';
 import type { SourceKind } from './sourceMime';
 import { labelForSource } from './sourceMime';
 import { loadLocalDb, updateLocalDb } from './store';
@@ -132,8 +132,10 @@ export const localBackend = {
       );
     }
 
+    let sourceId: number | undefined;
     try {
-      await persistSourceFile({ name: filename, sourceType, uri });
+      const stored = await persistSourceFile({ name: filename, sourceType, uri });
+      sourceId = stored.id;
     } catch {
       // Generation still works even if the file copy fails (e.g. web).
     }
@@ -144,6 +146,15 @@ export const localBackend = {
       sourceType,
       filename,
     });
+
+    if (sourceId != null) {
+      try {
+        const { markSourceUsedForFlashcards } = await import('./pdfs');
+        await markSourceUsedForFlashcards(sourceId);
+      } catch {
+        // Non-fatal — storage manager can still list the file.
+      }
+    }
 
     const sample = result.cards[0];
     const overviewBit = result.overview
@@ -169,13 +180,14 @@ export const localBackend = {
       source_type: sourceType,
       extraction_method: sourceType === 'photo' ? 'ocr' : 'gemini',
       overview: result.overview,
+      source_id: sourceId,
     };
   },
 
   async saveFlashcards(
     subjectId: number,
     cards: DraftFlashcard[],
-    options?: { preserveContent?: boolean },
+    options?: { preserveContent?: boolean; sourceId?: number },
   ): Promise<SaveFlashcardsResponse> {
     let subject!: Subject;
     const preserve = options?.preserveContent === true;
@@ -205,6 +217,17 @@ export const localBackend = {
       found.last = 'Just now';
       subject = { ...found };
     });
+
+    if (options?.sourceId != null) {
+      try {
+        const { markSourceUsedForFlashcards, maybeDeleteSourceAfterFlashcards } =
+          await import('./pdfs');
+        await markSourceUsedForFlashcards(options.sourceId, subjectId);
+        await maybeDeleteSourceAfterFlashcards(options.sourceId);
+      } catch {
+        // Flashcards are already saved — storage cleanup is best-effort.
+      }
+    }
 
     return {
       count: cards.length,
@@ -430,13 +453,33 @@ export const localBackend = {
     return db.settings;
   },
 
-  async updateSettings(patch: Partial<{ cloud_sync_enabled: boolean; daily_goal_minutes: number }>) {
-    let settings;
+  async updateSettings(patch: Partial<AppSettings>) {
+    let settings: AppSettings;
     await updateLocalDb((db) => {
       db.settings = { ...db.settings, ...patch };
       settings = db.settings;
     });
     return settings!;
+  },
+
+  async getStorageBreakdown() {
+    const { getStorageBreakdown } = await import('./storageManager');
+    return getStorageBreakdown();
+  },
+
+  async setSourceKeep(sourceId: number, keep: boolean) {
+    const { setSourceKeep } = await import('./pdfs');
+    return setSourceKeep(sourceId, keep);
+  },
+
+  async deleteStoredSource(sourceId: number) {
+    const { deleteStoredSource } = await import('./pdfs');
+    return deleteStoredSource(sourceId);
+  },
+
+  async deleteDisposableSources() {
+    const { deleteDisposableSources } = await import('./pdfs');
+    return deleteDisposableSources();
   },
 
   async getDeadlines(): Promise<Deadline[]> {

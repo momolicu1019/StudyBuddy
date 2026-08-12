@@ -7,6 +7,7 @@ export type RootStackParamList = {
   Flashcards: undefined;
   TypeNotes: undefined;
   Progress: undefined;
+  Storage: undefined;
   Deadlines: undefined;
   Pomodoro: undefined;
 };

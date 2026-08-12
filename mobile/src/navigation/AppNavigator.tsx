@@ -27,6 +27,7 @@ import { LoginScreen } from '../screens/LoginScreen';
 import { PomodoroScreen } from '../screens/PomodoroScreen';
 import { ProgressScreen } from '../screens/ProgressScreen';
 import { QuizScreen } from '../screens/QuizScreen';
+import { StorageScreen } from '../screens/StorageScreen';
 import { StudyScreen } from '../screens/StudyScreen';
 import { TypeNotesScreen } from '../screens/TypeNotesScreen';
 import { colors } from '../theme/colors';
@@ -232,6 +233,11 @@ export function AppNavigator() {
                 name="Progress"
                 component={ProgressScreen}
                 options={{ title: 'My Progress' }}
+              />
+              <Stack.Screen
+                name="Storage"
+                component={StorageScreen}
+                options={{ title: 'Storage' }}
               />
               <Stack.Screen
                 name="Study"

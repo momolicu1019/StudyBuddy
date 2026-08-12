@@ -188,6 +188,12 @@ export function ProgressScreen() {
         style={{ marginTop: 18 }}
       />
       <PrimaryButton
+        label="Manage storage"
+        variant="secondary"
+        onPress={() => navigation.navigate('Storage')}
+        style={{ marginTop: 10 }}
+      />
+      <PrimaryButton
         label="Take a quiz"
         variant="secondary"
         onPress={() => navigation.navigate('Quiz', {})}

@@ -36,6 +36,8 @@ export type GenerateDraftResponse = {
   warning?: string;
   extraction_method?: 'pdf-text' | 'ocr' | 'empty' | 'gemini';
   overview?: string;
+  /** Local stored source copy id (for storage cleanup after save). */
+  source_id?: number;
 };
 
 export type SaveFlashcardsResponse = {

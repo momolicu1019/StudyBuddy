@@ -66,6 +66,15 @@ export type StoredSource = {
   original_uri?: string;
   created_at: string;
   subject_id?: number;
+  /** File size in bytes when known. */
+  bytes?: number;
+  /**
+   * When true, Storage Manager / auto-cleanup will not delete this file.
+   * Defaults to true so student originals are kept unless they choose otherwise.
+   */
+  keep?: boolean;
+  /** Set after flashcards were generated from this source. */
+  used_for_flashcards?: boolean;
 };
 
 export type QuizResultRecord = {
@@ -80,6 +89,11 @@ export type QuizResultRecord = {
 export type AppSettings = {
   cloud_sync_enabled: boolean;
   daily_goal_minutes: number;
+  /**
+   * When true, delete the uploaded source copy after flashcards are saved.
+   * Flashcards are always kept. Files marked Keep are never auto-deleted.
+   */
+  delete_sources_after_flashcards: boolean;
 };
 
 export const EMPTY_LOCAL_DB: LocalDatabase = {
@@ -100,6 +114,7 @@ export const EMPTY_LOCAL_DB: LocalDatabase = {
   settings: {
     cloud_sync_enabled: false,
     daily_goal_minutes: 25,
+    delete_sources_after_flashcards: false,
   },
   next_subject_id: 1,
   next_card_id: 1,

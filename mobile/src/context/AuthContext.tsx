@@ -6,16 +6,16 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
-import { makeRedirectUri } from 'expo-auth-session';
+import { Platform } from 'react-native';
 
 import {
   backupLocalData,
   clearAuthState,
   createLocalAccount,
   getGoogleOAuthConfig,
+  getGoogleSignInSetupHint,
   isGoogleOAuthConfigured,
+  isNativeGoogleSignInAvailable,
   loadAuthState,
   restoreLocalData,
   saveAuthState,
@@ -25,7 +25,18 @@ import {
   type CloudActionResult,
 } from '../storage/cloud';
 
-WebBrowser.maybeCompleteAuthSession();
+type GoogleSignInModule = typeof import('@react-native-google-signin/google-signin');
+
+function loadGoogleSignInModule(): GoogleSignInModule | null {
+  if (!isNativeGoogleSignInAvailable()) return null;
+  try {
+    // Dynamic require so Expo Go never loads the TurboModule.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('@react-native-google-signin/google-signin') as GoogleSignInModule;
+  } catch {
+    return null;
+  }
+}
 
 type AuthContextValue = {
   ready: boolean;
@@ -33,6 +44,7 @@ type AuthContextValue = {
   skippedLogin: boolean;
   isSignedIn: boolean;
   googleConfigured: boolean;
+  googleSetupHint: string;
   signInWithGoogle: (profile?: {
     name?: string;
     email?: string;
@@ -162,10 +174,21 @@ function useAuthSession() {
     await persist({ session: null, skippedLogin: true });
   }, [persist]);
 
+  const signOutNativeGoogle = useCallback(async () => {
+    const mod = loadGoogleSignInModule();
+    if (!mod) return;
+    try {
+      await mod.GoogleSignin.signOut();
+    } catch {
+      // Ignore native sign-out failures; local session is still cleared.
+    }
+  }, []);
+
   const signOut = useCallback(async () => {
+    await signOutNativeGoogle();
     await clearAuthState();
     await persist({ session: null, skippedLogin: false });
-  }, [persist]);
+  }, [persist, signOutNativeGoogle]);
 
   const backupNow = useCallback(async () => {
     if (!session?.user) {
@@ -227,9 +250,10 @@ function useAuthSession() {
   };
 }
 
-/** Local email/password + demo Google (no OAuth client ID required). */
+/** Local email/password + demo Google (no native Google Sign-In). */
 function LocalAuthProvider({ children }: { children: React.ReactNode }) {
   const auth = useAuthSession();
+  const googleSetupHint = getGoogleSignInSetupHint();
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -238,6 +262,7 @@ function LocalAuthProvider({ children }: { children: React.ReactNode }) {
       skippedLogin: auth.skippedLogin,
       isSignedIn: Boolean(auth.session?.user),
       googleConfigured: false,
+      googleSetupHint,
       signInWithGoogle: auth.signInWithDemoGoogle,
       signInWithEmail: auth.signInWithEmail,
       createAccount: auth.createAccount,
@@ -257,84 +282,93 @@ function LocalAuthProvider({ children }: { children: React.ReactNode }) {
       auth.signOut,
       auth.backupNow,
       auth.restoreNow,
+      googleSetupHint,
     ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-/** Real Google OAuth when EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID is set. */
+/**
+ * Native Google Sign-In (Play Services / Google SDK).
+ * Avoids browser OAuth custom-scheme redirects that Google blocks with
+ * Error 400: invalid_request / OAuth 2.0 policy.
+ */
 function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
   const auth = useAuthSession();
   const oauth = getGoogleOAuthConfig()!;
-  const redirectUri = makeRedirectUri({
-    scheme: 'studybuddy',
-    path: 'oauth',
-  });
+  const googleMod = useMemo(() => loadGoogleSignInModule(), []);
 
-  const [request, , promptAsync] = Google.useAuthRequest({
-    webClientId: oauth.webClientId,
-    iosClientId: oauth.iosClientId,
-    androidClientId: oauth.androidClientId,
-    scopes: ['openid', 'profile', 'email'],
-    redirectUri,
-  });
+  useEffect(() => {
+    if (!googleMod) return;
+    googleMod.GoogleSignin.configure({
+      webClientId: oauth.webClientId,
+      iosClientId: oauth.iosClientId,
+      offlineAccess: false,
+      scopes: ['openid', 'profile', 'email'],
+    });
+  }, [googleMod, oauth.iosClientId, oauth.webClientId]);
 
   const signInWithGoogle = useCallback(async () => {
     try {
-      if (!request) {
-        return {
-          ok: false,
-          message: 'Google sign-in is still preparing. Please try again in a moment.',
-        };
-      }
-
-      const result = await promptAsync({ showInRecents: true });
-      if (result.type === 'dismiss' || result.type === 'cancel') {
-        return { ok: false, message: 'Google sign-in was cancelled.' };
-      }
-      if (result.type !== 'success') {
-        return {
-          ok: false,
-          message: 'Google sign-in failed. Check your OAuth client IDs and try again.',
-        };
-      }
-
-      const accessToken =
-        result.authentication?.accessToken ||
-        (result as { params?: { access_token?: string } }).params?.access_token;
-      if (!accessToken) {
+      if (!googleMod) {
         return {
           ok: false,
           message:
-            'Google did not return an access token. Confirm your Web client ID and redirect URI.',
+            'Google Sign-In is unavailable in this build. Use a development or preview build, or sign in with email.',
         };
       }
 
-      const profileRes = await fetch('https://www.googleapis.com/userinfo/v2/me', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (!profileRes.ok) {
-        return { ok: false, message: 'Could not load your Google profile.' };
+      if (Platform.OS === 'android') {
+        await googleMod.GoogleSignin.hasPlayServices({
+          showPlayServicesUpdateDialog: true,
+        });
       }
 
-      const profile = (await profileRes.json()) as {
-        id: string;
-        email: string;
-        name: string;
-        picture?: string;
-      };
+      const response = await googleMod.GoogleSignin.signIn();
+      if (response.type === 'cancelled') {
+        return { ok: false, message: 'Google sign-in was cancelled.' };
+      }
+      if (response.type !== 'success' || !response.data?.user) {
+        return {
+          ok: false,
+          message:
+            'Google sign-in failed. Confirm the Android OAuth client uses package com.studybuddy.ai and your signing SHA-1.',
+        };
+      }
+
+      const profile = response.data.user;
+      let accessToken: string | undefined;
+      try {
+        const tokens = await googleMod.GoogleSignin.getTokens();
+        accessToken = tokens.accessToken;
+      } catch {
+        accessToken = undefined;
+      }
 
       return auth.finishSignIn({
         id: profile.id,
         email: profile.email,
         name: profile.name || profile.email.split('@')[0] || 'Student',
-        photoUrl: profile.picture,
+        photoUrl: profile.photo ?? undefined,
         accessToken,
         provider: 'google',
         isDemo: false,
       });
     } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : '';
+      if (code === googleMod?.statusCodes.IN_PROGRESS) {
+        return { ok: false, message: 'Google sign-in is already in progress.' };
+      }
+      if (code === googleMod?.statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        return {
+          ok: false,
+          message: 'Google Play Services is required for Google sign-in.',
+        };
+      }
       return {
         ok: false,
         message:
@@ -343,7 +377,7 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
             : 'Could not sign in with Google. Please try again.',
       };
     }
-  }, [auth, promptAsync, request]);
+  }, [auth, googleMod]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -352,6 +386,7 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
       skippedLogin: auth.skippedLogin,
       isSignedIn: Boolean(auth.session?.user),
       googleConfigured: true,
+      googleSetupHint: '',
       signInWithGoogle,
       signInWithEmail: auth.signInWithEmail,
       createAccount: auth.createAccount,

@@ -62,14 +62,37 @@ Then press:
 
 1. On first launch, choose **Continue with Google**, create an email account, or **Continue without an account**.
 2. Tap the avatar (top right) anytime to manage PDF **Backup now** / **Restore**, or sign out.
-3. Without Google Cloud credentials the app uses a **demo Google session** so you can exercise the UI on-device.
-4. For real Google OAuth, copy `mobile/.env.example` → `mobile/.env` and set:
+3. **Expo Go** cannot run real Google Sign-In (Google blocks the old browser OAuth redirect). Use an EAS **development** or **preview** build.
+4. Without Google Cloud credentials (or without a native build), the app uses a **demo Google session** so you can exercise the UI on-device.
+5. For real Google Sign-In, copy `mobile/.env.example` → `mobile/.env` and configure Google Cloud:
 
 ```bash
+# Required — OAuth client type "Web application"
 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=your-web-client-id.apps.googleusercontent.com
+
+# Optional until you ship iOS — OAuth client type "iOS", bundle com.studybuddy.ai
+EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=your-ios-client-id.apps.googleusercontent.com
+
+# Optional note — Android matching uses package + SHA-1 in Google Cloud,
+# not this env var. You can still record the Android client ID here for reference.
+EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=your-android-client-id.apps.googleusercontent.com
 ```
 
-Add OAuth redirect URIs for Expo / your app scheme `studybuddy` in Google Cloud Console.
+Google Cloud Console checklist:
+
+1. **APIs & Services → OAuth consent screen** — add your test users while the app is in Testing.
+2. **Credentials → Create credentials → OAuth client ID → Web application** — copy into `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`.
+3. **Credentials → OAuth client ID → Android**
+   - Package name: `com.studybuddy.ai`
+   - SHA-1: from EAS (`eas credentials`) or your upload keystore (`keytool -list -v -keystore ...`)
+4. Rebuild after installing `@react-native-google-signin/google-signin` / changing env:
+
+```bash
+cd mobile
+npx eas-cli build --profile preview --platform android
+```
+
+Do **not** reuse the Web client ID as an Android/iOS client ID, and do not rely on a custom `studybuddy://` browser redirect — that is what produced Google’s `Error 400: invalid_request` / OAuth policy block.
 
 The app starts **empty** and stores data on the device. Typical study flow:
 

@@ -32,11 +32,33 @@ function loadDotEnv() {
 
 loadDotEnv();
 
+/** Reversed iOS client ID → URL scheme for @react-native-google-signin/google-signin. */
+function iosUrlSchemeFromClientId(iosClientId) {
+  const id = String(iosClientId || '').trim();
+  const suffix = '.apps.googleusercontent.com';
+  if (!id.endsWith(suffix)) return null;
+  const prefix = id.slice(0, -suffix.length);
+  if (!prefix) return null;
+  return `com.googleusercontent.apps.${prefix}`;
+}
+
 /** @type {import('expo/config').ExpoConfig} */
 module.exports = ({ config }) => {
   const base = appJson.expo ?? config;
+  const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '';
+  const iosUrlScheme = iosUrlSchemeFromClientId(iosClientId);
+
+  const plugins = [...(base.plugins ?? [])];
+  if (iosUrlScheme) {
+    plugins.push([
+      '@react-native-google-signin/google-signin',
+      { iosUrlScheme },
+    ]);
+  }
+
   return {
     ...base,
+    plugins,
     extra: {
       ...(base.extra ?? {}),
       // Loaded from mobile/.env at start time (EXPO_PUBLIC_* also inlined by Metro).

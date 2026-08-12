@@ -198,9 +198,54 @@ function readGoogleExtra(): GoogleExtra {
 
 export type GoogleOAuthConfig = {
   webClientId: string;
-  iosClientId: string;
-  androidClientId: string;
+  iosClientId?: string;
+  androidClientId?: string;
 };
+
+/** True when running inside Expo Go (no custom native modules). */
+export function isExpoGoRuntime(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Constants = require('expo-constants') as {
+      default: { executionEnvironment?: string };
+      ExecutionEnvironment?: { StoreClient: string };
+    };
+    const storeClient =
+      Constants.ExecutionEnvironment?.StoreClient ?? 'storeClient';
+    return Constants.default.executionEnvironment === storeClient;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Native Google Sign-In is available in development / production builds that
+ * include `@react-native-google-signin/google-signin`. Expo Go cannot load it.
+ */
+export function isNativeGoogleSignInAvailable(): boolean {
+  if (isExpoGoRuntime()) return false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { TurboModuleRegistry } = require('react-native') as {
+      TurboModuleRegistry: {
+        get: (name: string) => object | null;
+      };
+    };
+    return TurboModuleRegistry.get('RNGoogleSignin') != null;
+  } catch {
+    return false;
+  }
+}
+
+/** Builds the iOS reversed-client-id URL scheme for the config plugin. */
+export function iosUrlSchemeFromClientId(iosClientId: string): string | null {
+  const id = iosClientId.trim();
+  const suffix = '.apps.googleusercontent.com';
+  if (!id.endsWith(suffix)) return null;
+  const prefix = id.slice(0, -suffix.length);
+  if (!prefix) return null;
+  return `com.googleusercontent.apps.${prefix}`;
+}
 
 /** Reads Google OAuth client IDs from Expo config / EXPO_PUBLIC_* env. */
 export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
@@ -215,20 +260,42 @@ export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
   const iosClientId = (
     process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ||
     extra.googleIosClientId ||
-    webClientId
+    ''
   ).trim();
 
   const androidClientId = (
     process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
     extra.googleAndroidClientId ||
-    webClientId
+    ''
   ).trim();
 
-  return { webClientId, iosClientId, androidClientId };
+  return {
+    webClientId,
+    iosClientId: iosClientId || undefined,
+    androidClientId: androidClientId || undefined,
+  };
 }
 
+/**
+ * Real Google sign-in is ready when a Web client ID is set and the native
+ * Google Sign-In module is present (dev client / EAS build — not Expo Go).
+ */
 export function isGoogleOAuthConfigured(): boolean {
-  return Boolean(getGoogleOAuthConfig()?.webClientId);
+  return Boolean(getGoogleOAuthConfig()?.webClientId) && isNativeGoogleSignInAvailable();
+}
+
+/** Short hint for the login screen when real Google sign-in cannot run. */
+export function getGoogleSignInSetupHint(): string {
+  if (isExpoGoRuntime()) {
+    return 'Google Sign-In needs a development or preview build (not Expo Go). Email signup still works here.';
+  }
+  if (!getGoogleOAuthConfig()?.webClientId) {
+    return 'Continues with a Google-style session on this device. Add EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID and rebuild for real Google sign-in.';
+  }
+  if (!isNativeGoogleSignInAvailable()) {
+    return 'Google Sign-In native module missing. Rebuild the app with EAS after installing dependencies.';
+  }
+  return 'Continues with a Google-style session on this device.';
 }
 
 export function getGoogleWebClientId(): string | undefined {

@@ -36,6 +36,7 @@ export function LoginScreen() {
     createAccount,
     skipLogin,
     googleConfigured,
+    googleSetupHint,
   } = useAuth();
 
   const [mode, setMode] = useState<Mode>('signup');
@@ -356,10 +357,7 @@ export function LoginScreen() {
                     onPress={() => void onGoogle()}
                   />
                   {!googleConfigured ? (
-                    <Text style={styles.hint}>
-                      Continues with a Google-style session on this device. Add
-                      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for real Google sign-in.
-                    </Text>
+                    <Text style={styles.hint}>{googleSetupHint}</Text>
                   ) : null}
 
                   <Text style={styles.prompt}>
@@ -474,10 +472,7 @@ export function LoginScreen() {
                     onPress={() => void onGoogle()}
                   />
                   {!googleConfigured ? (
-                    <Text style={styles.hint}>
-                      Continues with a Google-style session on this device. Add
-                      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID for real Google sign-in.
-                    </Text>
+                    <Text style={styles.hint}>{googleSetupHint}</Text>
                   ) : null}
 
                   <Text style={styles.terms}>

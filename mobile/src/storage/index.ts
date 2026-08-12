@@ -22,7 +22,15 @@ export type {
   AuthSession,
   CloudActionResult,
 } from './cloud';
-export { loadLocalDb, resetLocalDb } from './store';
+export {
+  GUEST_STORAGE_SCOPE,
+  getActiveStorageScope,
+  loadLocalDb,
+  resetLocalDb,
+  setActiveStorageScope,
+  sourcesDirForScope,
+  storageKeyForScope,
+} from './store';
 export type { LocalDatabase, AppSettings, StoredSource, Deadline, TutorChat, TutorChatMessage } from './schema';
 export {
   daysUntilDue,

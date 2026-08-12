@@ -29,6 +29,7 @@ On-device code lives in `mobile/src/storage/`. Sign in is optional via the login
 ## Features
 
 - Optional **Continue with Google** or email login
+- **Per-account on-device data** — each Google/email login keeps its own folders, flashcards, and progress on this device
 - Dashboard with note upload (PDF / photo) → generate flashcards → save to a folder
 - Subject folders (create, rename, delete, search)
 - Flashcard study mode
@@ -61,10 +62,11 @@ Then press:
 ### Login & Google sign-in
 
 1. On first launch, choose **Continue with Google**, create an email account, or **Continue without an account**.
-2. Tap the avatar (top right) anytime to manage PDF **Backup now** / **Restore**, or sign out.
-3. **Expo Go** cannot run real Google Sign-In (Google blocks the old browser OAuth redirect). Use an EAS **development** or **preview** build.
-4. Without Google Cloud credentials (or without a native build), the app uses a **demo Google session** so you can exercise the UI on-device.
-5. For real Google Sign-In, copy `mobile/.env.example` → `mobile/.env` and configure Google Cloud:
+2. Study content (folders, flashcards, progress, sources) is stored **per account on this device**. Sign in with Google A, then Google B → each sees only their own data. Guest / skip-login uses a separate guest profile.
+3. Tap the avatar (top right) anytime to manage PDF **Backup now** / **Restore**, or sign out.
+4. **Expo Go** cannot run real Google Sign-In (Google blocks the old browser OAuth redirect). Use an EAS **development** or **preview** build.
+5. Without Google Cloud credentials (or without a native build), the app uses a **demo Google session** so you can exercise the UI on-device.
+6. For real Google Sign-In, copy `mobile/.env.example` → `mobile/.env` and configure Google Cloud:
 
 ```bash
 # Required — OAuth client type "Web application"

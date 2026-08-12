@@ -2,14 +2,15 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import type { StoredSource } from './schema';
 import type { SourceKind } from './sourceMime';
-import { loadLocalDb, updateLocalDb } from './store';
+import {
+  getActiveStorageScope,
+  loadLocalDb,
+  sourcesDirForScope,
+  updateLocalDb,
+} from './store';
 
 function sourcesDir(): string {
-  const base = FileSystem.documentDirectory;
-  if (!base) {
-    throw new Error('File system is not available on this platform');
-  }
-  return `${base}studybuddy/sources/`;
+  return sourcesDirForScope(getActiveStorageScope());
 }
 
 async function ensureSourcesDir(): Promise<string> {

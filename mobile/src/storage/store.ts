@@ -1,8 +1,42 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 
 import { EMPTY_LOCAL_DB, type ActivityDay, type LocalDatabase, type TutorChat } from './schema';
 
-const STORAGE_KEY = 'studybuddy.local.v1';
+/** Pre-account-scoping AsyncStorage key (migrated once into a scoped key). */
+export const LEGACY_STORAGE_KEY = 'studybuddy.local.v1';
+
+/** Namespace used while skipped / signed out (device guest profile). */
+export const GUEST_STORAGE_SCOPE = 'guest';
+
+const MIGRATION_FLAG_KEY = 'studybuddy.local.scope-migrated.v1';
+
+let activeScopeId = GUEST_STORAGE_SCOPE;
+
+export function sanitizeStorageScope(scopeId: string): string {
+  const cleaned = scopeId.trim().replace(/[^a-zA-Z0-9._-]+/g, '_');
+  return cleaned.slice(0, 120) || GUEST_STORAGE_SCOPE;
+}
+
+export function getActiveStorageScope(): string {
+  return activeScopeId;
+}
+
+export function storageKeyForScope(scopeId: string): string {
+  return `studybuddy.local.v1.${sanitizeStorageScope(scopeId)}`;
+}
+
+export function sourcesRootDir(): string {
+  const base = FileSystem.documentDirectory;
+  if (!base) {
+    throw new Error('File system is not available on this platform');
+  }
+  return `${base}studybuddy/sources/`;
+}
+
+export function sourcesDirForScope(scopeId: string): string {
+  return `${sourcesRootDir()}${sanitizeStorageScope(scopeId)}/`;
+}
 
 function normalizeActivityDays(
   raw: LocalDatabase['activity_days'] | null | undefined,
@@ -103,9 +137,114 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
   };
 }
 
+async function rewriteLegacySourceUris(
+  db: LocalDatabase,
+  scopeId: string,
+): Promise<LocalDatabase> {
+  const legacyPrefix = sourcesRootDir();
+  const scopedDir = sourcesDirForScope(scopeId);
+  const scopedPrefix = scopedDir;
+
+  // Already under this scope — nothing to move.
+  const needsMove = db.pdfs.some(
+    (p) =>
+      typeof p.uri === 'string' &&
+      p.uri.startsWith(legacyPrefix) &&
+      !p.uri.startsWith(scopedPrefix),
+  );
+  if (!needsMove) return db;
+
+  try {
+    const info = await FileSystem.getInfoAsync(scopedDir);
+    if (!info.exists) {
+      await FileSystem.makeDirectoryAsync(scopedDir, { intermediates: true });
+    }
+  } catch {
+    return db;
+  }
+
+  const nextPdfs = [];
+  for (const pdf of db.pdfs) {
+    if (
+      typeof pdf.uri !== 'string' ||
+      !pdf.uri.startsWith(legacyPrefix) ||
+      pdf.uri.startsWith(scopedPrefix)
+    ) {
+      nextPdfs.push(pdf);
+      continue;
+    }
+
+    const fileName = pdf.uri.slice(legacyPrefix.length).replace(/^\/+/, '');
+    // Skip if somehow already nested under another account folder name.
+    if (fileName.includes('/')) {
+      nextPdfs.push(pdf);
+      continue;
+    }
+
+    const dest = `${scopedDir}${fileName}`;
+    try {
+      const srcInfo = await FileSystem.getInfoAsync(pdf.uri);
+      if (srcInfo.exists) {
+        const destInfo = await FileSystem.getInfoAsync(dest);
+        if (!destInfo.exists) {
+          await FileSystem.moveAsync({ from: pdf.uri, to: dest });
+        }
+        nextPdfs.push({ ...pdf, uri: dest });
+        continue;
+      }
+    } catch {
+      // Keep original URI if move fails.
+    }
+    nextPdfs.push(pdf);
+  }
+
+  return { ...db, pdfs: nextPdfs };
+}
+
+/**
+ * One-time migration: claim the pre-scoping shared DB (+ flat source files)
+ * into the first active account/guest namespace that is still empty.
+ */
+async function migrateLegacyDataIfNeeded(scopeId: string): Promise<void> {
+  try {
+    const migrated = await AsyncStorage.getItem(MIGRATION_FLAG_KEY);
+    const legacyJson = await AsyncStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!legacyJson) {
+      if (!migrated) {
+        await AsyncStorage.setItem(MIGRATION_FLAG_KEY, new Date().toISOString());
+      }
+      return;
+    }
+
+    const key = storageKeyForScope(scopeId);
+    const existing = await AsyncStorage.getItem(key);
+    if (!existing) {
+      let db = normalize(JSON.parse(legacyJson) as Partial<LocalDatabase>);
+      db = await rewriteLegacySourceUris(db, scopeId);
+      await AsyncStorage.setItem(key, JSON.stringify(db));
+    }
+
+    await AsyncStorage.removeItem(LEGACY_STORAGE_KEY);
+    await AsyncStorage.setItem(MIGRATION_FLAG_KEY, new Date().toISOString());
+  } catch {
+    // Best-effort; scoped empty DB is safer than crashing startup.
+  }
+}
+
+/**
+ * Switch the active on-device data namespace.
+ * Call on sign-in / skip / sign-out before reading or writing study data.
+ */
+export async function setActiveStorageScope(scopeId: string): Promise<string> {
+  const next = sanitizeStorageScope(scopeId);
+  await migrateLegacyDataIfNeeded(next);
+  activeScopeId = next;
+  return activeScopeId;
+}
+
 export async function loadLocalDb(): Promise<LocalDatabase> {
   try {
-    const json = await AsyncStorage.getItem(STORAGE_KEY);
+    const json = await AsyncStorage.getItem(storageKeyForScope(activeScopeId));
     if (!json) return normalize(null);
     return normalize(JSON.parse(json) as Partial<LocalDatabase>);
   } catch {
@@ -114,7 +253,7 @@ export async function loadLocalDb(): Promise<LocalDatabase> {
 }
 
 export async function saveLocalDb(db: LocalDatabase): Promise<void> {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  await AsyncStorage.setItem(storageKeyForScope(activeScopeId), JSON.stringify(db));
 }
 
 export async function updateLocalDb(

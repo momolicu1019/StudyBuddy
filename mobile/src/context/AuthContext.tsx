@@ -24,6 +24,10 @@ import {
   type AuthUser,
   type CloudActionResult,
 } from '../storage/cloud';
+import {
+  GUEST_STORAGE_SCOPE,
+  setActiveStorageScope,
+} from '../storage/store';
 
 type GoogleSignInModule = typeof import('@react-native-google-signin/google-signin');
 
@@ -81,6 +85,9 @@ function useAuthSession() {
       try {
         const state = await loadAuthState();
         if (!alive) return;
+        const scope = state.session?.user.id ?? GUEST_STORAGE_SCOPE;
+        await setActiveStorageScope(scope);
+        if (!alive) return;
         setSession(state.session);
         setSkippedLogin(state.skippedLogin);
       } finally {
@@ -103,6 +110,7 @@ function useAuthSession() {
 
   const finishSignIn = useCallback(
     async (user: AuthUser): Promise<CloudActionResult> => {
+      await setActiveStorageScope(user.id);
       const nextSession: AuthSession = {
         user,
         signedInAt: new Date().toISOString(),
@@ -171,6 +179,7 @@ function useAuthSession() {
   );
 
   const skipLogin = useCallback(async () => {
+    await setActiveStorageScope(GUEST_STORAGE_SCOPE);
     await persist({ session: null, skippedLogin: true });
   }, [persist]);
 
@@ -187,6 +196,7 @@ function useAuthSession() {
   const signOut = useCallback(async () => {
     await signOutNativeGoogle();
     await clearAuthState();
+    await setActiveStorageScope(GUEST_STORAGE_SCOPE);
     await persist({ session: null, skippedLogin: false });
   }, [persist, signOutNativeGoogle]);
 

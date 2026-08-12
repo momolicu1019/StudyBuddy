@@ -16,6 +16,11 @@ import type {
   Subject,
 } from '../api/types';
 import type { SourceKind } from '../storage/sourceMime';
+import {
+  GUEST_STORAGE_SCOPE,
+  setActiveStorageScope,
+} from '../storage/store';
+import { useAuth } from './AuthContext';
 
 type ToastState = { message: string; visible: boolean };
 
@@ -52,6 +57,8 @@ const emptyStats: Stats = {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const { ready: authReady, session, skippedLogin } = useAuth();
+  const storageScope = session?.user.id ?? GUEST_STORAGE_SCOPE;
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [stats, setStats] = useState<Stats>(emptyStats);
   const [loading, setLoading] = useState(true);
@@ -83,9 +90,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Reload study data whenever the signed-in account (or guest) changes.
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!authReady) return;
+    let alive = true;
+    setLoading(true);
+    setSubjects([]);
+    setStats(emptyStats);
+    void (async () => {
+      await setActiveStorageScope(storageScope);
+      if (!alive) return;
+      await refresh();
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [authReady, storageScope, skippedLogin, refresh]);
 
   const createSubject = useCallback(
     async (name: string, icon: string) => {

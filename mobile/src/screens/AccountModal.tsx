@@ -84,7 +84,8 @@ export function AccountModal({ visible, onClose }: Props) {
                 await signOut();
                 return {
                   ok: true,
-                  message: 'Signed out. Local data stays on this device.',
+                  message:
+                    "Signed out. This account's study data stays on this device and won't show under another account.",
                 };
               })
             }

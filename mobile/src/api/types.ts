@@ -36,6 +36,8 @@ export type GenerateDraftResponse = {
   warning?: string;
   extraction_method?: 'pdf-text' | 'ocr' | 'empty' | 'gemini';
   overview?: string;
+  /** Local stored source copy id (for storage cleanup after save). */
+  source_id?: number;
 };
 
 export type SaveFlashcardsResponse = {
@@ -50,15 +52,27 @@ export type ReviewResponse = {
   stats: Stats;
 };
 
+export type QuizQuestionKind =
+  | 'multiple_choice'
+  | 'typed_answer'
+  | 'true_false'
+  | 'fill_blank';
+
 export type QuizQuestion = {
   id: number;
+  kind: QuizQuestionKind;
   question: string;
   options: string[];
   correct_index: number;
+  /** Expected text for typed / fill-in answers. */
+  correct_text?: string;
+  /** Concept / topic label used on the results “review” list. */
+  topic?: string;
 };
 
 export type QuizQuestionReview = {
   id: number;
+  kind: QuizQuestionKind;
   question: string;
   options: string[];
   selected_index: number | null;
@@ -66,6 +80,7 @@ export type QuizQuestionReview = {
   is_correct: boolean;
   correct_answer: string;
   selected_answer: string | null;
+  topic?: string;
 };
 
 export type QuizResult = {
@@ -74,6 +89,7 @@ export type QuizResult = {
   percentage: number;
   message: string;
   reviews: QuizQuestionReview[];
+  topics_to_review: string[];
 };
 
 export type TutorReply = {

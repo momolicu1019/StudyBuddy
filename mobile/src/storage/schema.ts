@@ -1,6 +1,13 @@
 import type { DraftFlashcard, Flashcard, Stats, Subject } from '../api/types';
 import type { SourceKind } from './sourceMime';
 
+/** Per-calendar-day study activity for weekly analytics charts. */
+export type ActivityDay = {
+  focus_minutes: number;
+  cards_reviewed: number;
+  quizzes_taken: number;
+};
+
 /** On-device database — primary Study Buddy storage (local-first). */
 export type LocalDatabase = {
   subjects: Subject[];
@@ -12,6 +19,8 @@ export type LocalDatabase = {
   deadlines: Deadline[];
   /** Saved AI Tutor conversations the student can reopen. */
   tutor_chats: TutorChat[];
+  /** YYYY-MM-DD → daily study activity for analytics. */
+  activity_days: Record<string, ActivityDay>;
   settings: AppSettings;
   next_subject_id: number;
   next_card_id: number;
@@ -57,6 +66,15 @@ export type StoredSource = {
   original_uri?: string;
   created_at: string;
   subject_id?: number;
+  /** File size in bytes when known. */
+  bytes?: number;
+  /**
+   * When true, Storage Manager / auto-cleanup will not delete this file.
+   * Defaults to true so student originals are kept unless they choose otherwise.
+   */
+  keep?: boolean;
+  /** Set after flashcards were generated from this source. */
+  used_for_flashcards?: boolean;
 };
 
 export type QuizResultRecord = {
@@ -71,6 +89,11 @@ export type QuizResultRecord = {
 export type AppSettings = {
   cloud_sync_enabled: boolean;
   daily_goal_minutes: number;
+  /**
+   * When true, delete the uploaded source copy after flashcards are saved.
+   * Flashcards are always kept. Files marked Keep are never auto-deleted.
+   */
+  delete_sources_after_flashcards: boolean;
 };
 
 export const EMPTY_LOCAL_DB: LocalDatabase = {
@@ -86,9 +109,12 @@ export const EMPTY_LOCAL_DB: LocalDatabase = {
   quizzes: [],
   deadlines: [],
   tutor_chats: [],
+  /** YYYY-MM-DD → activity totals */
+  activity_days: {},
   settings: {
     cloud_sync_enabled: false,
     daily_goal_minutes: 25,
+    delete_sources_after_flashcards: false,
   },
   next_subject_id: 1,
   next_card_id: 1,

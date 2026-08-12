@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -14,22 +15,47 @@ import type { QuizQuestion, QuizResult } from '../api/types';
 import { Card, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
-import { QUIZ_SIZE } from '../storage/quizBuilder';
+import {
+  QUIZ_COUNTS,
+  QUIZ_TYPES,
+  quizTypeById,
+  type QuizType,
+} from '../storage/quizTypes';
 import { colors } from '../theme/colors';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Quiz'>;
-type Phase = 'select' | 'quiz' | 'results';
+type Phase = 'select' | 'quiz' | 'results' | 'mistakes';
+
+type AnswerMap = Record<
+  number,
+  { selected_index?: number | null; text?: string | null }
+>;
+
+function kindLabel(kind: QuizQuestion['kind']): string {
+  switch (kind) {
+    case 'multiple_choice':
+      return 'Multiple choice';
+    case 'typed_answer':
+      return 'Type the answer';
+    case 'true_false':
+      return 'True / False';
+    case 'fill_blank':
+      return 'Fill in the blank';
+  }
+}
 
 export function QuizScreen({ route, navigation }: Props) {
   const { subjects, showToast, refresh } = useApp();
   const routeSubjectId = route.params?.subjectId;
 
   const [phase, setPhase] = useState<Phase>('select');
+  const [quizType, setQuizType] = useState<QuizType>('multiple_choice');
+  const [questionCount, setQuestionCount] = useState<number>(10);
   const [selectedIds, setSelectedIds] = useState<number[]>(
     routeSubjectId ? [routeSubjectId] : [],
   );
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
-  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [answers, setAnswers] = useState<AnswerMap>({});
   const [index, setIndex] = useState(0);
   const [result, setResult] = useState<QuizResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -45,6 +71,12 @@ export function QuizScreen({ route, navigation }: Props) {
     [selectedSubjects],
   );
 
+  const subjectSummary = selectedSubjects.length
+    ? selectedSubjects.map((s) => s.name).join(' · ')
+    : 'No subject';
+
+  const activeType = quizTypeById(quizType);
+
   useEffect(() => {
     if (routeSubjectId && subjects.some((s) => s.id === routeSubjectId)) {
       setSelectedIds([routeSubjectId]);
@@ -55,6 +87,15 @@ export function QuizScreen({ route, navigation }: Props) {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
+  }
+
+  function isAnswered(q: QuizQuestion): boolean {
+    const a = answers[q.id];
+    if (!a) return false;
+    if (q.kind === 'typed_answer' || q.kind === 'fill_blank') {
+      return Boolean(String(a.text ?? '').trim());
+    }
+    return a.selected_index !== undefined && a.selected_index !== null;
   }
 
   async function startQuiz() {
@@ -72,15 +113,18 @@ export function QuizScreen({ route, navigation }: Props) {
     setAnswers({});
     setIndex(0);
     try {
-      showToast('Creating quiz questions with AI…');
-      const data = await api.getQuiz(selectedIds);
+      showToast(`Creating ${activeType.label.toLowerCase()} quiz…`);
+      const data = await api.getQuiz(selectedIds, {
+        quizType,
+        size: questionCount,
+      });
       if (!data.length) {
         showToast('No quiz questions could be generated');
         return;
       }
       setQuestions(data);
       setPhase('quiz');
-      showToast(`${data.length} quiz questions ready`);
+      showToast(`${data.length} questions ready`);
     } catch (error) {
       const detail =
         error instanceof Error ? error.message : 'Could not start quiz. Try again.';
@@ -91,7 +135,7 @@ export function QuizScreen({ route, navigation }: Props) {
   }
 
   async function submit() {
-    if (Object.keys(answers).length < questions.length) {
+    if (questions.some((q) => !isAnswered(q))) {
       showToast('Answer every question first');
       return;
     }
@@ -132,99 +176,133 @@ export function QuizScreen({ route, navigation }: Props) {
     );
   }
 
-  if (phase === 'results' && result) {
+  if ((phase === 'results' || phase === 'mistakes') && result) {
+    const incorrect = result.total - result.score;
+    const mistakeReviews = result.reviews.filter((r) => !r.is_correct);
+    const showingMistakes = phase === 'mistakes';
+    const reviewsToShow = showingMistakes ? mistakeReviews : result.reviews;
+
     return (
       <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-        <Text style={styles.eyebrow}>Quiz summary</Text>
-        <Text style={styles.score}>{result.percentage}%</Text>
-        <Text style={styles.h2}>
-          {result.score}/{result.total} correct
-        </Text>
-        <Text style={[styles.sub, { marginTop: 8, marginBottom: 18 }]}>
-          {result.message}
-        </Text>
+        {!showingMistakes ? (
+          <>
+            <Text style={styles.completeTitle}>🎉 Quiz Complete!</Text>
+            <Text style={styles.scoreLine}>
+              {result.score} / {result.total}
+            </Text>
+            <Text style={styles.score}>{result.percentage}%</Text>
+            <Text style={[styles.sub, { marginBottom: 16 }]}>{result.message}</Text>
 
-        {result.reviews.map((review, reviewIndex) => {
-          const correct = review.is_correct;
-          return (
-            <Card
-              key={`${review.id}-${reviewIndex}`}
-              style={[
-                styles.reviewCard,
-                correct ? styles.reviewCorrect : styles.reviewWrong,
-              ]}
-            >
-              <Text style={styles.reviewLabel}>
-                Question {reviewIndex + 1} · {correct ? 'Correct' : 'Incorrect'}
-              </Text>
-              <Text style={styles.reviewQuestion}>{review.question}</Text>
-
-              <View style={{ gap: 8, marginTop: 12 }}>
-                {review.options.map((option, optIndex) => {
-                  const isSelected = review.selected_index === optIndex;
-                  const isCorrectOption = review.correct_index === optIndex;
-                  return (
-                    <View
-                      key={`${review.id}-opt-${optIndex}`}
-                      style={[
-                        styles.reviewOption,
-                        isCorrectOption && styles.reviewOptionCorrect,
-                        isSelected && !correct && styles.reviewOptionWrong,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.reviewOptionText,
-                          isCorrectOption && styles.reviewOptionTextCorrect,
-                          isSelected && !correct && styles.reviewOptionTextWrong,
-                        ]}
-                      >
-                        {option}
-                      </Text>
-                    </View>
-                  );
-                })}
+            <View style={styles.statRow}>
+              <View style={[styles.statBox, styles.statGood]}>
+                <Text style={styles.statLabel}>Correct</Text>
+                <Text style={styles.statValue}>{result.score}</Text>
               </View>
+              <View style={[styles.statBox, styles.statBad]}>
+                <Text style={styles.statLabel}>Incorrect</Text>
+                <Text style={styles.statValue}>{incorrect}</Text>
+              </View>
+            </View>
 
-              {!correct ? (
+            {result.topics_to_review.length ? (
+              <Card style={{ marginTop: 8, marginBottom: 8 }}>
+                <Text style={styles.topicsHeading}>Topics to review:</Text>
+                <View style={{ gap: 8, marginTop: 10 }}>
+                  {result.topics_to_review.map((topic) => (
+                    <Text key={topic} style={styles.topicLine}>
+                      🔴 {topic}
+                    </Text>
+                  ))}
+                </View>
+              </Card>
+            ) : (
+              <Card style={{ marginTop: 8, marginBottom: 8 }}>
+                <Text style={styles.topicsHeading}>Topics to review:</Text>
+                <Text style={[styles.sub, { marginTop: 8 }]}>
+                  None — you got every topic right.
+                </Text>
+              </Card>
+            )}
+
+            <View style={[styles.row, { marginTop: 8 }]}>
+              <PrimaryButton
+                label="Review Mistakes"
+                variant="secondary"
+                onPress={() => {
+                  if (!mistakeReviews.length) {
+                    showToast('No mistakes to review');
+                    return;
+                  }
+                  setPhase('mistakes');
+                }}
+                style={{ flex: 1 }}
+              />
+              <PrimaryButton
+                label="Try Again"
+                onPress={() => void startQuiz()}
+                style={{ flex: 1 }}
+              />
+            </View>
+            <PrimaryButton
+              label="Choose quiz"
+              variant="secondary"
+              onPress={resetToSelect}
+              style={{ marginTop: 10, marginBottom: 20 }}
+            />
+          </>
+        ) : (
+          <>
+            <Text style={styles.h1}>Review mistakes</Text>
+            <Text style={[styles.sub, { marginBottom: 16 }]}>
+              {mistakeReviews.length} incorrect · focus on these topics next
+            </Text>
+          </>
+        )}
+
+        {showingMistakes
+          ? reviewsToShow.map((review, reviewIndex) => (
+              <Card
+                key={`${review.id}-${reviewIndex}`}
+                style={[styles.reviewCard, styles.reviewWrong]}
+              >
+                <Text style={styles.reviewLabel}>
+                  {kindLabel(review.kind)} · Incorrect
+                  {review.topic ? ` · ${review.topic}` : ''}
+                </Text>
+                <Text style={styles.reviewQuestion}>{review.question}</Text>
+                <Text style={[styles.sub, { marginTop: 10 }]}>
+                  Your answer: {review.selected_answer ?? '—'}
+                </Text>
                 <Text style={styles.correctAnswerLine}>
                   Correct answer is {review.correct_answer}
                 </Text>
-              ) : null}
-            </Card>
-          );
-        })}
+              </Card>
+            ))
+          : null}
 
-        <View style={[styles.row, { marginTop: 8 }]}>
-          <PrimaryButton
-            label="Retake quiz"
-            onPress={() => void startQuiz()}
-            style={{ flex: 1 }}
-          />
-          <PrimaryButton
-            label="Choose subjects"
-            variant="secondary"
-            onPress={resetToSelect}
-            style={{ flex: 1 }}
-          />
-        </View>
-        <PrimaryButton
-          label="Study flashcards"
-          variant="secondary"
-          onPress={() =>
-            navigation.navigate('Study', {
-              subjectId: selectedIds[0] ?? subjects[0].id,
-            })
-          }
-          style={{ marginTop: 10, marginBottom: 20 }}
-        />
+        {showingMistakes ? (
+          <View style={[styles.row, { marginTop: 8 }]}>
+            <PrimaryButton
+              label="Back to summary"
+              variant="secondary"
+              onPress={() => setPhase('results')}
+              style={{ flex: 1 }}
+            />
+            <PrimaryButton
+              label="Try Again"
+              onPress={() => void startQuiz()}
+              style={{ flex: 1 }}
+            />
+          </View>
+        ) : null}
       </ScrollView>
     );
   }
 
   if (phase === 'quiz' && questions.length) {
     const q = questions[index];
-    const answeredCount = Object.keys(answers).length;
+    const answeredCount = questions.filter((item) => isAnswered(item)).length;
+    const current = answers[q.id] ?? {};
 
     return (
       <ScrollView
@@ -233,8 +311,8 @@ export function QuizScreen({ route, navigation }: Props) {
         keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.eyebrow}>
-          🧠 Quiz Mode ·{' '}
-          {selectedSubjects.map((s) => `${s.icon} ${s.name}`).join(' · ')}
+          {activeType.icon} {activeType.label} · {questions.length} questions ·{' '}
+          {subjectSummary}
         </Text>
         <Text style={styles.progress}>
           Question {index + 1} of {questions.length}
@@ -244,27 +322,59 @@ export function QuizScreen({ route, navigation }: Props) {
         </Text>
 
         <Card>
+          <Text style={styles.kindBadge}>{kindLabel(q.kind)}</Text>
           <Text style={styles.question}>{q.question}</Text>
-          <View style={{ gap: 10, marginTop: 18 }}>
-            {q.options.map((option, optIndex) => {
-              const selected = answers[q.id] === optIndex;
-              return (
-                <Pressable
-                  key={`${q.id}-${optIndex}`}
-                  onPress={() =>
-                    setAnswers((prev) => ({ ...prev, [q.id]: optIndex }))
-                  }
-                  style={[styles.option, selected && styles.optionSelected]}
-                >
-                  <Text
-                    style={[styles.optionText, selected && styles.optionTextSelected]}
+
+          {q.kind === 'typed_answer' || q.kind === 'fill_blank' ? (
+            <TextInput
+              value={String(current.text ?? '')}
+              onChangeText={(text) =>
+                setAnswers((prev) => ({
+                  ...prev,
+                  [q.id]: { ...prev[q.id], text },
+                }))
+              }
+              placeholder={
+                q.kind === 'fill_blank'
+                  ? 'Type the missing word or phrase'
+                  : 'Type your answer'
+              }
+              placeholderTextColor={colors.muted}
+              style={styles.textAnswer}
+              multiline
+              autoCapitalize="sentences"
+            />
+          ) : (
+            <View style={{ gap: 10, marginTop: 18 }}>
+              {q.options.map((option, optIndex) => {
+                const selected = current.selected_index === optIndex;
+                return (
+                  <Pressable
+                    key={`${q.id}-${optIndex}`}
+                    onPress={() =>
+                      setAnswers((prev) => ({
+                        ...prev,
+                        [q.id]: {
+                          ...prev[q.id],
+                          selected_index: optIndex,
+                        },
+                      }))
+                    }
+                    style={[styles.option, selected && styles.optionSelected]}
                   >
-                    {option}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+                    <Text
+                      style={[
+                        styles.optionText,
+                        selected && styles.optionTextSelected,
+                      ]}
+                    >
+                      {option}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          )}
         </Card>
 
         <View style={styles.row}>
@@ -278,8 +388,8 @@ export function QuizScreen({ route, navigation }: Props) {
             <PrimaryButton
               label="Next"
               onPress={() => {
-                if (answers[q.id] === undefined) {
-                  showToast('Pick an answer first');
+                if (!isAnswered(q)) {
+                  showToast('Answer this question first');
                   return;
                 }
                 setIndex((i) => i + 1);
@@ -306,13 +416,31 @@ export function QuizScreen({ route, navigation }: Props) {
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-      <Text style={styles.h1}>🧠 Quiz Mode</Text>
+      <Text style={styles.h1}>Choose Quiz</Text>
       <Text style={[styles.sub, { marginBottom: 16 }]}>
-        Select one or more subject folders. After you start, AI builds up to{' '}
-        {QUIZ_SIZE} multiple-choice questions from your flashcards — focused on
-        understanding, not plain definitions.
+        Pick a quiz style, subject, and length — then practice.
       </Text>
 
+      <Text style={styles.sectionLabel}>Quiz type</Text>
+      <View style={styles.typeList}>
+        {QUIZ_TYPES.map((type) => {
+          const active = quizType === type.id;
+          return (
+            <Pressable
+              key={type.id}
+              onPress={() => setQuizType(type.id)}
+              style={[styles.typeRow, active && styles.typeRowActive]}
+            >
+              <Text style={[styles.typeTitle, active && styles.typeTitleActive]}>
+                {type.icon} {type.label}
+              </Text>
+              <Text style={styles.sub}>{type.blurb}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <Text style={[styles.sectionLabel, { marginTop: 18 }]}>Subjects</Text>
       <View style={styles.subjectList}>
         {subjects.map((s) => {
           const selected = selectedIds.includes(s.id);
@@ -338,21 +466,44 @@ export function QuizScreen({ route, navigation }: Props) {
         })}
       </View>
 
+      <Text style={[styles.sectionLabel, { marginTop: 18 }]}>
+        Number of questions
+      </Text>
+      <View style={styles.countRow}>
+        {QUIZ_COUNTS.map((n) => {
+          const active = questionCount === n;
+          return (
+            <Pressable
+              key={n}
+              onPress={() => setQuestionCount(n)}
+              style={[styles.countChip, active && styles.countChipActive]}
+            >
+              <Text
+                style={[
+                  styles.countChipText,
+                  active && styles.countChipTextActive,
+                ]}
+              >
+                {n}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
       <Card style={{ marginTop: 16 }}>
         <Text style={styles.summaryLine}>
-          {selectedIds.length
-            ? `${selectedIds.length} folder${selectedIds.length > 1 ? 's' : ''} · ${availableCards} flashcards available`
-            : 'No folders selected yet'}
+          {questionCount} questions · {subjectSummary || 'Pick a subject'}
         </Text>
         <Text style={[styles.sub, { marginTop: 6 }]}>
           {availableCards > 0
-            ? `AI will generate up to ${Math.min(QUIZ_SIZE, Math.max(5, availableCards * 2))} understanding-based questions`
+            ? `${activeType.icon} ${activeType.label} from ${availableCards} flashcards`
             : 'Generate flashcards first to unlock quiz questions'}
         </Text>
       </Card>
 
       <PrimaryButton
-        label={loading ? 'AI is writing questions…' : 'Start quiz'}
+        label={loading ? 'Building quiz…' : 'Start quiz'}
         onPress={() => void startQuiz()}
         style={{ marginTop: 18, opacity: loading ? 0.7 : 1 }}
       />
@@ -375,9 +526,34 @@ const styles = StyleSheet.create({
   },
   h1: { fontSize: 30, fontWeight: '800', color: colors.ink, marginBottom: 6 },
   h2: { fontSize: 22, fontWeight: '800', color: colors.ink },
+  completeTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: colors.ink,
+    marginBottom: 8,
+  },
+  scoreLine: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colors.ink,
+    marginBottom: 4,
+  },
   sub: { color: colors.muted, fontSize: 15, lineHeight: 22 },
+  sectionLabel: {
+    color: colors.ink,
+    fontWeight: '800',
+    fontSize: 15,
+    marginBottom: 10,
+  },
   eyebrow: { color: colors.muted, fontWeight: '700', marginBottom: 6 },
   progress: { color: colors.primary, fontWeight: '800', marginBottom: 14 },
+  kindBadge: {
+    alignSelf: 'flex-start',
+    color: colors.primary,
+    fontWeight: '800',
+    fontSize: 12,
+    marginBottom: 10,
+  },
   question: { fontSize: 22, fontWeight: '800', color: colors.ink, lineHeight: 30 },
   option: {
     borderWidth: 1,
@@ -392,8 +568,54 @@ const styles = StyleSheet.create({
   },
   optionText: { color: colors.ink, fontWeight: '600' },
   optionTextSelected: { color: colors.primary },
+  textAnswer: {
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 96,
+    textAlignVertical: 'top',
+    backgroundColor: '#fff',
+    color: colors.ink,
+    fontSize: 16,
+  },
   row: { flexDirection: 'row', gap: 10, marginTop: 18 },
-  score: { fontSize: 56, fontWeight: '800', color: colors.primary },
+  score: { fontSize: 56, fontWeight: '800', color: colors.primary, marginBottom: 4 },
+  statRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
+  statBox: {
+    flex: 1,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+  },
+  statGood: {
+    backgroundColor: colors.successSoft,
+    borderColor: colors.success,
+  },
+  statBad: {
+    backgroundColor: colors.dangerSoft,
+    borderColor: colors.danger,
+  },
+  statLabel: { color: colors.muted, fontWeight: '700', fontSize: 13 },
+  statValue: { color: colors.ink, fontWeight: '800', fontSize: 28, marginTop: 4 },
+  topicsHeading: { color: colors.ink, fontWeight: '800', fontSize: 16 },
+  topicLine: { color: colors.ink, fontWeight: '700', fontSize: 15 },
+  typeList: { gap: 8 },
+  typeRow: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 14,
+    padding: 14,
+    backgroundColor: '#fff',
+  },
+  typeRowActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  typeTitle: { color: colors.ink, fontWeight: '800', fontSize: 16, marginBottom: 2 },
+  typeTitleActive: { color: colors.primary },
   subjectList: { gap: 10 },
   subjectChip: {
     borderWidth: 1,
@@ -409,14 +631,27 @@ const styles = StyleSheet.create({
   },
   subjectChipText: { color: colors.ink, fontWeight: '700', fontSize: 16 },
   subjectChipTextActive: { color: colors.primary },
+  countRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  countChip: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#fff',
+    borderRadius: 11,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minWidth: 52,
+    alignItems: 'center',
+  },
+  countChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  countChipText: { color: colors.muted, fontWeight: '700' },
+  countChipTextActive: { color: colors.primary },
   summaryLine: { color: colors.ink, fontWeight: '700', fontSize: 15 },
   reviewCard: {
     marginBottom: 12,
     borderWidth: 1.5,
-  },
-  reviewCorrect: {
-    borderColor: colors.success,
-    backgroundColor: '#F1FBF6',
   },
   reviewWrong: {
     borderColor: colors.danger,
@@ -433,24 +668,6 @@ const styles = StyleSheet.create({
     color: colors.ink,
     lineHeight: 22,
   },
-  reviewOption: {
-    borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 12,
-    padding: 12,
-    backgroundColor: '#fff',
-  },
-  reviewOptionCorrect: {
-    borderColor: colors.success,
-    backgroundColor: '#E5F7EE',
-  },
-  reviewOptionWrong: {
-    borderColor: colors.danger,
-    backgroundColor: '#FFE4E9',
-  },
-  reviewOptionText: { color: colors.ink, fontWeight: '600' },
-  reviewOptionTextCorrect: { color: '#1F7A4D' },
-  reviewOptionTextWrong: { color: colors.danger },
   correctAnswerLine: {
     marginTop: 12,
     fontWeight: '800',

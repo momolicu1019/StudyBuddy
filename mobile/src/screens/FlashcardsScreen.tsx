@@ -94,7 +94,7 @@ export function FlashcardsScreen() {
               <Text style={styles.h1}>{liveSelected.name}</Text>
               <Text style={styles.sub}>
                 {liveSelected.cards === 0
-                  ? 'No flashcards yet — upload notes from the Dashboard.'
+                  ? 'No flashcards yet — upload notes or use Type Notes from the Dashboard.'
                   : `Your ${liveSelected.name} study deck`}
               </Text>
             </View>
@@ -128,7 +128,7 @@ export function FlashcardsScreen() {
               }
             />
             <PrimaryButton
-              label="Ask AI Tutor"
+              label="✨ AI Tutor"
               variant="secondary"
               onPress={() =>
                 navigation.navigate('AITutor', { subject: liveSelected.name })
@@ -170,7 +170,7 @@ export function FlashcardsScreen() {
           {filtered.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.sub}>
-                No subject folders yet. Create one, then upload notes or a photo.
+                No subject folders yet. Create one, then upload notes, use a photo, or Type Notes.
               </Text>
             </View>
           ) : (

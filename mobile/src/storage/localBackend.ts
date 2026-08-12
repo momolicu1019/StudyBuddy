@@ -22,11 +22,18 @@ import type {
 } from '../api/types';
 import { formatExplanationAsBullets, normalizeKeyPointTitle } from './explanationFormat';
 import { persistSourceFile } from './pdfs';
-import type { Deadline, TutorChat, TutorChatMessage } from './schema';
+import type { AppSettings, Deadline, TutorChat, TutorChatMessage } from './schema';
 import type { SourceKind } from './sourceMime';
 import { labelForSource } from './sourceMime';
 import { loadLocalDb, updateLocalDb } from './store';
 import { generateFlashcardsViaGeminiPipeline } from './studyPipeline';
+import type { TutorMode } from './tutorModes';
+import type { QuizType } from './quizTypes';
+import {
+  bumpActivityDay,
+  buildProgressAnalytics,
+  type ProgressAnalytics,
+} from './progressAnalytics';
 
 const MAX_TUTOR_CHATS = 40;
 
@@ -125,8 +132,10 @@ export const localBackend = {
       );
     }
 
+    let sourceId: number | undefined;
     try {
-      await persistSourceFile({ name: filename, sourceType, uri });
+      const stored = await persistSourceFile({ name: filename, sourceType, uri });
+      sourceId = stored.id;
     } catch {
       // Generation still works even if the file copy fails (e.g. web).
     }
@@ -137,6 +146,15 @@ export const localBackend = {
       sourceType,
       filename,
     });
+
+    if (sourceId != null) {
+      try {
+        const { markSourceUsedForFlashcards } = await import('./pdfs');
+        await markSourceUsedForFlashcards(sourceId);
+      } catch {
+        // Non-fatal — storage manager can still list the file.
+      }
+    }
 
     const sample = result.cards[0];
     const overviewBit = result.overview
@@ -162,24 +180,33 @@ export const localBackend = {
       source_type: sourceType,
       extraction_method: sourceType === 'photo' ? 'ocr' : 'gemini',
       overview: result.overview,
+      source_id: sourceId,
     };
   },
 
   async saveFlashcards(
     subjectId: number,
     cards: DraftFlashcard[],
+    options?: { preserveContent?: boolean; sourceId?: number },
   ): Promise<SaveFlashcardsResponse> {
     let subject!: Subject;
+    const preserve = options?.preserveContent === true;
     await updateLocalDb((db) => {
       const found = db.subjects.find((s) => s.id === subjectId);
       if (!found) throw new Error('Subject not found');
       const key = String(subjectId);
       db.flashcards[key] = db.flashcards[key] ?? [];
       for (const draft of cards) {
-        const answer = formatExplanationAsBullets(draft.answer);
+        const question = draft.question.trim();
+        const rawAnswer = draft.answer.trim();
+        const answer = preserve
+          ? rawAnswer
+          : formatExplanationAsBullets(rawAnswer);
         db.flashcards[key].push({
           id: db.next_card_id,
-          question: normalizeKeyPointTitle(draft.question, answer),
+          question: preserve
+            ? question
+            : normalizeKeyPointTitle(question, answer),
           answer,
           mastered: false,
         });
@@ -190,6 +217,17 @@ export const localBackend = {
       found.last = 'Just now';
       subject = { ...found };
     });
+
+    if (options?.sourceId != null) {
+      try {
+        const { markSourceUsedForFlashcards, maybeDeleteSourceAfterFlashcards } =
+          await import('./pdfs');
+        await markSourceUsedForFlashcards(options.sourceId, subjectId);
+        await maybeDeleteSourceAfterFlashcards(options.sourceId);
+      } catch {
+        // Flashcards are already saved — storage cleanup is best-effort.
+      }
+    }
 
     return {
       count: cards.length,
@@ -222,6 +260,7 @@ export const localBackend = {
       // Count a review only when mastery state actually changes.
       if (changed) {
         db.progress.flashcards_reviewed += 1;
+        bumpActivityDay(db, { cards_reviewed: 1 });
       }
 
       flashcard = { ...card };
@@ -232,7 +271,10 @@ export const localBackend = {
     return { flashcard, subject, stats };
   },
 
-  async getQuiz(subjectId: number | number[]): Promise<QuizQuestion[]> {
+  async getQuiz(
+    subjectId: number | number[],
+    options?: { quizType?: QuizType; size?: number },
+  ): Promise<QuizQuestion[]> {
     const { buildQuizQuestionsViaGemini } = await import('./quizBuilder');
     const db = await loadLocalDb();
     const ids = (Array.isArray(subjectId) ? subjectId : [subjectId]).filter(
@@ -243,15 +285,18 @@ export const localBackend = {
     const cards = ids.flatMap((id) => db.flashcards[String(id)] ?? []);
     if (!cards.length) return [];
 
-    const result = await buildQuizQuestionsViaGemini(cards, 20);
+    const quizType = options?.quizType ?? 'multiple_choice';
+    const size = options?.size ?? 10;
+    const result = await buildQuizQuestionsViaGemini(cards, size, quizType);
     return result.questions;
   },
 
   async submitQuiz(
     subjectId: number | number[],
-    answers: Record<number, number>,
+    answers: Record<number, { selected_index?: number | null; text?: string | null }>,
     questions: QuizQuestion[],
   ): Promise<QuizResult> {
+    const { answersMatch } = await import('./quizBuilder');
     let result!: QuizResult;
     const ids = Array.isArray(subjectId) ? subjectId : [subjectId];
 
@@ -261,26 +306,57 @@ export const localBackend = {
       if (!questions.length) throw new Error('No quiz questions to grade');
 
       const reviews = questions.map((q) => {
+        const raw = answers[q.id];
         const selectedIndex =
-          answers[q.id] === undefined ? null : Number(answers[q.id]);
-        const isCorrect =
-          selectedIndex !== null && selectedIndex === q.correct_index;
+          raw?.selected_index === undefined || raw?.selected_index === null
+            ? null
+            : Number(raw.selected_index);
+        const typed = String(raw?.text ?? '').trim();
+
+        let isCorrect = false;
+        let selectedAnswer: string | null = null;
+        let correctAnswer =
+          q.correct_text?.trim() ||
+          q.options[q.correct_index] ||
+          '';
+
+        if (q.kind === 'typed_answer' || q.kind === 'fill_blank') {
+          selectedAnswer = typed || null;
+          isCorrect = Boolean(typed && answersMatch(correctAnswer, typed));
+        } else {
+          selectedAnswer =
+            selectedIndex === null ? null : (q.options[selectedIndex] ?? null);
+          isCorrect =
+            selectedIndex !== null && selectedIndex === q.correct_index;
+          correctAnswer = q.options[q.correct_index] ?? correctAnswer;
+        }
+
         return {
           id: q.id,
+          kind: q.kind,
           question: q.question,
           options: q.options,
           selected_index: selectedIndex,
           correct_index: q.correct_index,
           is_correct: isCorrect,
-          correct_answer: q.options[q.correct_index] ?? '',
-          selected_answer:
-            selectedIndex === null ? null : (q.options[selectedIndex] ?? null),
+          correct_answer: correctAnswer,
+          selected_answer: selectedAnswer,
+          topic: q.topic,
         };
       });
 
       const score = reviews.filter((r) => r.is_correct).length;
       const total = reviews.length;
       const percentage = total ? Math.round((score / total) * 100) : 0;
+
+      const topics_to_review = Array.from(
+        new Set(
+          reviews
+            .filter((r) => !r.is_correct)
+            .map((r) => (r.topic || '').trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 8);
 
       for (const review of reviews) {
         if (!review.is_correct) continue;
@@ -305,6 +381,7 @@ export const localBackend = {
       if (taken === 0) db.progress.quiz_average = percentage;
       else db.progress.quiz_average = Math.round((db.progress.quiz_average + percentage) / 2);
       db.progress.quizzes_taken = taken + 1;
+      bumpActivityDay(db, { quizzes_taken: 1 });
 
       db.quizzes.push({
         id: db.quizzes.length + 1,
@@ -321,7 +398,7 @@ export const localBackend = {
         message = 'Solid effort. Review the missed cards and try again.';
       else message = 'Keep going! Study the flashcards, then retake the quiz.';
 
-      result = { score, total, percentage, message, reviews };
+      result = { score, total, percentage, message, reviews, topics_to_review };
     });
 
     return result;
@@ -335,17 +412,28 @@ export const localBackend = {
   async logFocus(minutes: number): Promise<Stats> {
     let stats!: Stats;
     await updateLocalDb((db) => {
+      const mins = Math.max(0, Math.round(minutes));
       db.progress.focus_hours =
-        Math.round((db.progress.focus_hours + minutes / 60) * 10) / 10;
+        Math.round((db.progress.focus_hours + mins / 60) * 10) / 10;
+      bumpActivityDay(db, { focus_minutes: mins });
       stats = publicStats(db.progress);
     });
     return stats;
+  },
+
+  async getProgressAnalytics(): Promise<ProgressAnalytics> {
+    const db = await loadLocalDb();
+    return buildProgressAnalytics(db);
   },
 
   async askTutor(
     message: string,
     subject?: string,
     history?: { role: 'user' | 'assistant'; text: string }[],
+    options?: {
+      mode?: TutorMode;
+      guideWithoutAnswer?: boolean;
+    },
   ): Promise<TutorReply> {
     const { answerTutorQuestion } = await import('./tutorEngine');
     const db = await loadLocalDb();
@@ -355,6 +443,8 @@ export const localBackend = {
       history,
       subjects: db.subjects,
       flashcardsBySubject: db.flashcards,
+      mode: options?.mode,
+      guideWithoutAnswer: options?.guideWithoutAnswer,
     });
   },
 
@@ -363,13 +453,33 @@ export const localBackend = {
     return db.settings;
   },
 
-  async updateSettings(patch: Partial<{ cloud_sync_enabled: boolean; daily_goal_minutes: number }>) {
-    let settings;
+  async updateSettings(patch: Partial<AppSettings>) {
+    let settings: AppSettings;
     await updateLocalDb((db) => {
       db.settings = { ...db.settings, ...patch };
       settings = db.settings;
     });
     return settings!;
+  },
+
+  async getStorageBreakdown() {
+    const { getStorageBreakdown } = await import('./storageManager');
+    return getStorageBreakdown();
+  },
+
+  async setSourceKeep(sourceId: number, keep: boolean) {
+    const { setSourceKeep } = await import('./pdfs');
+    return setSourceKeep(sourceId, keep);
+  },
+
+  async deleteStoredSource(sourceId: number) {
+    const { deleteStoredSource } = await import('./pdfs');
+    return deleteStoredSource(sourceId);
+  },
+
+  async deleteDisposableSources() {
+    const { deleteDisposableSources } = await import('./pdfs');
+    return deleteDisposableSources();
   },
 
   async getDeadlines(): Promise<Deadline[]> {

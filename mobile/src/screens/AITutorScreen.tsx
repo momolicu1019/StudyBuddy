@@ -18,6 +18,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { api } from '../api/client';
 import type { DraftFlashcard } from '../api/types';
+import {
+  AiDraftReviewFlow,
+  type AiDraftPhase,
+} from '../components/AiDraftReviewFlow';
 import { AppModal, Card, PrimaryButton, SearchInput } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
@@ -27,6 +31,9 @@ import type { TutorChat } from '../storage/schema';
 import {
   isCloudTutorConfigured,
   isFlashcardWorthyTutorReply,
+  TUTOR_MODES,
+  tutorModeById,
+  type TutorMode,
 } from '../storage/tutorEngine';
 import { colors } from '../theme/colors';
 
@@ -41,12 +48,21 @@ type ChatItem = {
 
 const FOLDER_ICONS = ['📚', '🧬', '🔬', '➗', '🌎', '📖', '💻', '🎨'];
 
-function greetingMessage(subject: string | undefined, cloudReady: boolean): ChatItem {
+function greetingMessage(
+  subject: string | undefined,
+  cloudReady: boolean,
+  mode: TutorMode,
+  guideWithoutAnswer: boolean,
+): ChatItem {
+  const modeMeta = tutorModeById(mode);
+  const guideBit = guideWithoutAnswer
+    ? ' I will guide you with questions and will not hand you the final answer.'
+    : '';
   return {
     role: 'assistant',
     text: subject
-      ? `Hi! I'm your AI Tutor for ${subject}. Ask a real question and I'll answer it using your notes${cloudReady ? ' and AI' : ''}.`
-      : `Hi! I'm your Study Buddy AI Tutor. Ask a content question (for example “What is photosynthesis?”) and I'll answer it${cloudReady ? '' : ' from your flashcards'}.`,
+      ? `Hi! I'm your AI Tutor for ${subject}. Mode: ${modeMeta.icon} ${modeMeta.label}.${guideBit} Ask a question and I'll help${cloudReady ? '' : ' from your notes'}.`
+      : `Hi! I'm your Study Buddy AI Tutor. Pick how you want help below, then ask a question.${guideBit}${cloudReady ? '' : ' AI is offline — I’ll use your flashcards when I can.'}`,
   };
 }
 
@@ -80,11 +96,13 @@ export function AITutorScreen({ route }: Props) {
 
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tutorMode, setTutorMode] = useState<TutorMode>('explain');
+  const [guideWithoutAnswer, setGuideWithoutAnswer] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [activeChatId, setActiveChatId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatItem[]>([
-    greetingMessage(subject, cloudReady),
+    greetingMessage(subject, cloudReady, 'explain', false),
   ]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState<TutorChat[]>([]);
@@ -95,6 +113,7 @@ export function AITutorScreen({ route }: Props) {
     question?: string;
   } | null>(null);
   const [draftCards, setDraftCards] = useState<DraftFlashcard[] | null>(null);
+  const [draftPhase, setDraftPhase] = useState<AiDraftPhase>('summary');
   const [makingCards, setMakingCards] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveFolderId, setSaveFolderId] = useState<number | null>(null);
@@ -160,6 +179,7 @@ export function AITutorScreen({ route }: Props) {
   function closeCardModal() {
     setCardSource(null);
     setDraftCards(null);
+    setDraftPhase('summary');
     setMakingCards(false);
     setSaving(false);
     setCreatingFolder(false);
@@ -168,13 +188,43 @@ export function AITutorScreen({ route }: Props) {
     setSaveFolderId(matchedSubjectId);
   }
 
+  const activeMode = tutorModeById(tutorMode);
+
   function startNewChat() {
     if (busy) return;
     setActiveChatId(null);
-    setMessages([greetingMessage(subject, cloudReady)]);
+    setMessages([
+      greetingMessage(subject, cloudReady, tutorMode, guideWithoutAnswer),
+    ]);
     setInput('');
     setHistoryOpen(false);
     showToast('Started a new chat');
+  }
+
+  function selectMode(mode: TutorMode) {
+    setTutorMode(mode);
+    // Refresh greeting only when still on the initial empty chat.
+    setMessages((prev) => {
+      if (prev.length === 1 && prev[0]?.role === 'assistant' && activeChatId == null) {
+        return [
+          greetingMessage(subject, cloudReady, mode, guideWithoutAnswer),
+        ];
+      }
+      return prev;
+    });
+  }
+
+  function toggleGuideWithoutAnswer() {
+    setGuideWithoutAnswer((prev) => {
+      const next = !prev;
+      setMessages((msgs) => {
+        if (msgs.length === 1 && msgs[0]?.role === 'assistant' && activeChatId == null) {
+          return [greetingMessage(subject, cloudReady, tutorMode, next)];
+        }
+        return msgs;
+      });
+      return next;
+    });
   }
 
   async function openHistoryChat(chat: TutorChat) {
@@ -206,7 +256,9 @@ export function AITutorScreen({ route }: Props) {
       await api.deleteTutorChat(id);
       if (activeChatIdRef.current === id) {
         setActiveChatId(null);
-        setMessages([greetingMessage(subject, cloudReady)]);
+        setMessages([
+          greetingMessage(subject, cloudReady, tutorMode, guideWithoutAnswer),
+        ]);
       }
       setDeleteChatId(null);
       await loadHistory();
@@ -261,7 +313,10 @@ export function AITutorScreen({ route }: Props) {
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setBusy(true);
     try {
-      const res = await api.askTutor(text, subject, history);
+      const res = await api.askTutor(text, subject, history, {
+        mode: tutorMode,
+        guideWithoutAnswer,
+      });
       const allowFlashcards =
         res.allow_flashcards ?? isFlashcardWorthyTutorReply(res.reply);
       setMessages((prev) => [
@@ -320,6 +375,7 @@ export function AITutorScreen({ route }: Props) {
         return;
       }
       setDraftCards(result.cards);
+      setDraftPhase('summary');
     } catch (error) {
       showToast(friendlyAiError(error));
       closeCardModal();
@@ -392,17 +448,60 @@ export function AITutorScreen({ route }: Props) {
         >
           <View style={styles.headerRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.h1}>✦ AI Tutor</Text>
+              <Text style={styles.h1}>✨ AI Tutor</Text>
               <Text style={styles.sub}>
-                Ask questions and get direct answers
-                {subject ? ` for ${subject}` : ''}.
-                {!cloudReady
-                  ? ' AI is offline on this device right now.'
-                  : ' AI is ready.'}{' '}
-                You can turn answers into flashcards.
+                What would you like help with?
+                {subject ? ` (${subject})` : ''}
+                {!cloudReady ? ' AI is offline on this device right now.' : ''}
               </Text>
             </View>
           </View>
+
+          <Text style={styles.modeHeading}>Help modes</Text>
+          <View style={styles.modeChips}>
+            {TUTOR_MODES.map((mode) => {
+              const active = tutorMode === mode.id;
+              return (
+                <Pressable
+                  key={mode.id}
+                  onPress={() => selectMode(mode.id)}
+                  style={[styles.modeChip, active && styles.modeChipActive]}
+                >
+                  <Text
+                    style={[
+                      styles.modeChipText,
+                      active && styles.modeChipTextActive,
+                    ]}
+                  >
+                    {mode.icon} {mode.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.modeBlurb}>{activeMode.blurb}</Text>
+
+          <Pressable
+            onPress={toggleGuideWithoutAnswer}
+            style={[
+              styles.guideToggle,
+              guideWithoutAnswer && styles.guideToggleOn,
+            ]}
+          >
+            <Text
+              style={[
+                styles.guideToggleTitle,
+                guideWithoutAnswer && styles.guideToggleTitleOn,
+              ]}
+            >
+              🚫 Don’t give me the answer
+            </Text>
+            <Text style={styles.guideToggleSub}>
+              {guideWithoutAnswer
+                ? 'On — I’ll guide you with questions instead of solving it for you.'
+                : 'Off — turn on to learn by thinking, not copying answers.'}
+            </Text>
+          </Pressable>
 
           <View style={styles.toolbar}>
             <PrimaryButton
@@ -468,7 +567,7 @@ export function AITutorScreen({ route }: Props) {
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder="Ask a study question..."
+            placeholder={activeMode.placeholder}
             placeholderTextColor={colors.muted}
             style={styles.input}
             multiline
@@ -570,115 +669,126 @@ export function AITutorScreen({ route }: Props) {
           closeCardModal();
         }}
       >
-        <Text style={styles.modalTitle}>
-          {makingCards ? 'Creating flashcards…' : 'Flashcards from tutor answer'}
-        </Text>
-        <Text style={[styles.sub, { marginTop: 8 }]}>
-          {makingCards
-            ? 'Turning this explanation into exam-review cards.'
-            : draftCards
-              ? `${draftCards.length} card${draftCards.length === 1 ? '' : 's'} ready to save.`
-              : 'Preparing cards…'}
-        </Text>
-
-        {draftCards?.[0] ? (
-          <View style={styles.sample}>
-            <Text style={styles.sampleLabel}>Sample</Text>
-            <Text style={styles.sampleTitle}>{draftCards[0].question}</Text>
-            <Text style={[styles.sub, { marginTop: 6 }]}>{draftCards[0].answer}</Text>
-          </View>
-        ) : null}
-
-        {!makingCards && draftCards ? (
+        {makingCards || !draftCards ? (
           <>
-            <Text style={[styles.sub, { marginTop: 16, marginBottom: 8, fontWeight: '700' }]}>
-              Save to subject
+            <Text style={styles.modalTitle}>
+              {makingCards ? 'Creating flashcards…' : 'Preparing cards…'}
             </Text>
-
-            {creatingFolder || subjects.length === 0 ? (
-              <View>
-                <Text style={styles.sub}>
-                  {subjects.length === 0
-                    ? 'No subjects yet. Create one to save these flashcards.'
-                    : 'Name your new subject.'}
+            <Text style={[styles.sub, { marginTop: 8 }]}>
+              Turning this explanation into exam-review cards.
+            </Text>
+          </>
+        ) : (
+          <AiDraftReviewFlow
+            cards={draftCards}
+            onChangeCards={(next) => setDraftCards(next)}
+            phase={draftPhase}
+            onPhaseChange={setDraftPhase}
+            onDiscard={closeCardModal}
+            subtitle="Review AI cards from this tutor answer before saving."
+            saveSlot={
+              <>
+                <Text
+                  style={[
+                    styles.sub,
+                    { marginTop: 16, marginBottom: 8, fontWeight: '700' },
+                  ]}
+                >
+                  Save to subject
                 </Text>
-                <SearchInput
-                  value={folderName}
-                  onChangeText={setFolderName}
-                  placeholder="e.g. Biology"
-                  style={styles.folderNameInput}
-                />
-                <View style={styles.subjectChips}>
-                  {FOLDER_ICONS.map((icon) => (
-                    <Pressable
-                      key={icon}
-                      onPress={() => setFolderIcon(icon)}
-                      style={[styles.chip, folderIcon === icon && styles.chipActive]}
-                    >
-                      <Text style={{ fontSize: 18 }}>{icon}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <View style={[styles.row, { marginTop: 12 }]}>
-                  {subjects.length > 0 ? (
-                    <PrimaryButton
-                      label="Back"
-                      variant="secondary"
-                      onPress={() => setCreatingFolder(false)}
-                      style={styles.flexBtn}
+
+                {creatingFolder || subjects.length === 0 ? (
+                  <View>
+                    <Text style={styles.sub}>
+                      {subjects.length === 0
+                        ? 'No subjects yet. Create one to save these flashcards.'
+                        : 'Name your new subject.'}
+                    </Text>
+                    <SearchInput
+                      value={folderName}
+                      onChangeText={setFolderName}
+                      placeholder="e.g. Biology"
+                      style={styles.folderNameInput}
                     />
-                  ) : null}
+                    <View style={styles.subjectChips}>
+                      {FOLDER_ICONS.map((icon) => (
+                        <Pressable
+                          key={icon}
+                          onPress={() => setFolderIcon(icon)}
+                          style={[
+                            styles.chip,
+                            folderIcon === icon && styles.chipActive,
+                          ]}
+                        >
+                          <Text style={{ fontSize: 18 }}>{icon}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    <View style={[styles.row, { marginTop: 12 }]}>
+                      {subjects.length > 0 ? (
+                        <PrimaryButton
+                          label="Back"
+                          variant="secondary"
+                          onPress={() => setCreatingFolder(false)}
+                          style={styles.flexBtn}
+                        />
+                      ) : null}
+                      <PrimaryButton
+                        label="Create subject"
+                        onPress={() => void createFolderInline()}
+                        style={styles.flexBtn}
+                      />
+                    </View>
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.subjectChips}>
+                      {subjects.map((s) => (
+                        <Pressable
+                          key={s.id}
+                          onPress={() => setSaveFolderId(s.id)}
+                          style={[
+                            styles.chip,
+                            saveFolderId === s.id && styles.chipActive,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.chipText,
+                              saveFolderId === s.id && styles.chipTextActive,
+                            ]}
+                          >
+                            {s.icon} {s.name}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    <PrimaryButton
+                      label="+ New subject"
+                      variant="secondary"
+                      onPress={() => setCreatingFolder(true)}
+                      style={{ marginTop: 10 }}
+                    />
+                  </>
+                )}
+
+                <View style={[styles.row, { marginTop: 20 }]}>
                   <PrimaryButton
-                    label="Create subject"
-                    onPress={() => void createFolderInline()}
+                    label="Discard"
+                    variant="secondary"
+                    onPress={closeCardModal}
                     style={styles.flexBtn}
                   />
+                  <PrimaryButton
+                    label={saving ? 'Saving…' : 'Save flashcards'}
+                    onPress={() => void onSaveCards()}
+                    style={{ flex: 1, opacity: saving ? 0.7 : 1 }}
+                  />
                 </View>
-              </View>
-            ) : (
-              <>
-                <View style={styles.subjectChips}>
-                  {subjects.map((s) => (
-                    <Pressable
-                      key={s.id}
-                      onPress={() => setSaveFolderId(s.id)}
-                      style={[styles.chip, saveFolderId === s.id && styles.chipActive]}
-                    >
-                      <Text
-                        style={[
-                          styles.chipText,
-                          saveFolderId === s.id && styles.chipTextActive,
-                        ]}
-                      >
-                        {s.icon} {s.name}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <PrimaryButton
-                  label="+ New subject"
-                  variant="secondary"
-                  onPress={() => setCreatingFolder(true)}
-                  style={{ marginTop: 10 }}
-                />
               </>
-            )}
-
-            <View style={[styles.row, { marginTop: 20 }]}>
-              <PrimaryButton
-                label="Discard"
-                variant="secondary"
-                onPress={closeCardModal}
-                style={styles.flexBtn}
-              />
-              <PrimaryButton
-                label={saving ? 'Saving…' : 'Save flashcards'}
-                onPress={() => void onSaveCards()}
-                style={{ flex: 1, opacity: saving ? 0.7 : 1 }}
-              />
-            </View>
-          </>
-        ) : null}
+            }
+          />
+        )}
       </AppModal>
     </KeyboardAvoidingView>
   );
@@ -691,6 +801,62 @@ const styles = StyleSheet.create({
   headerRow: { marginBottom: 4 },
   h1: { fontSize: 30, fontWeight: '800', color: colors.ink },
   sub: { color: colors.muted, marginTop: 6, marginBottom: 18, lineHeight: 20 },
+  modeHeading: {
+    color: colors.ink,
+    fontWeight: '800',
+    fontSize: 15,
+    marginBottom: 8,
+  },
+  modeChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  modeChip: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#fff',
+    borderRadius: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  modeChipActive: {
+    backgroundColor: colors.primarySoft,
+    borderColor: colors.primary,
+  },
+  modeChipText: { color: colors.muted, fontWeight: '600', fontSize: 13 },
+  modeChipTextActive: { color: colors.primary },
+  modeBlurb: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  guideToggle: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  guideToggleOn: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  guideToggleTitle: {
+    color: colors.ink,
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  guideToggleTitleOn: { color: colors.primary },
+  guideToggleSub: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+  },
   subEmpty: { color: colors.muted, lineHeight: 20, marginBottom: 0 },
   toolbar: { flexDirection: 'row', gap: 10, marginBottom: 12 },
   toolbarBtn: { flex: 1 },

@@ -2,6 +2,12 @@ import type { Flashcard, Subject, TutorReply } from '../api/types';
 import { isAiConfigured } from './aiConfig';
 import { sanitizeStudyText } from './explanationFormat';
 import { friendlyAiError, generateAiText } from './geminiClient';
+import {
+  guideWithoutAnswerInstruction,
+  modeAllowsFlashcards,
+  modeInstruction,
+  type TutorMode,
+} from './tutorModes';
 
 export type TutorMessage = {
   role: 'user' | 'assistant';
@@ -14,9 +20,17 @@ type TutorContext = {
   history?: TutorMessage[];
   subjects: Subject[];
   flashcardsBySubject: Record<string, Flashcard[]>;
+  mode?: TutorMode;
+  guideWithoutAnswer?: boolean;
 };
 
 export { isAiConfigured as isCloudTutorConfigured };
+export type { TutorMode } from './tutorModes';
+export {
+  TUTOR_MODES,
+  tutorModeById,
+  modeAllowsFlashcards,
+} from './tutorModes';
 
 function tokenize(text: string): string[] {
   return text
@@ -150,6 +164,8 @@ function gatherRelevantNotes(ctx: TutorContext): {
 async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
   if (!isAiConfigured()) return null;
 
+  const mode: TutorMode = ctx.mode ?? 'explain';
+  const guide = ctx.guideWithoutAnswer === true;
   const { topic, notes } = gatherRelevantNotes(ctx);
   const notesBlock =
     notes.length > 0
@@ -169,7 +185,11 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
 
   const system = [
     'You are Study Buddy AI Tutor, a friendly and accurate study coach.',
-    'Answer the student question directly and clearly with useful academic content.',
+    modeInstruction(mode),
+    guide ? guideWithoutAnswerInstruction() : '',
+    guide || mode === 'hint' || mode === 'test'
+      ? 'Prefer questions and short coaching over long lectures.'
+      : 'Answer the student question clearly with useful academic content.',
     'Use short paragraphs, numbered steps, or bullets when helpful.',
     'Write plain text only — never use markdown (no **, __, *, #, backticks) and never use LaTeX or math markup (no $, $$, \\frac, \\times, \\text{}).',
     'For formulas, write normal readable text with unicode symbols when useful (for example: V_total = V_1 = V_2 = … and V = I × R).',
@@ -177,13 +197,18 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
     'If notes are missing or incomplete, still teach the topic using solid general knowledge — do not apologize about missing flashcards.',
     'Never say phrases like “since you don’t have flashcards”, “I couldn’t find matching flashcards”, or “generate flashcards first”.',
     'Never end with tips about uploading notes, creating flashcards, or app features — stay on the subject matter.',
-    'Keep replies concise (about 80–180 words) unless the student asks for more detail.',
+    guide || mode === 'hint' || mode === 'test'
+      ? 'Keep replies concise (about 40–120 words).'
+      : 'Keep replies concise (about 80–180 words) unless the student asks for more detail.',
     `Current subject focus: ${topic}.`,
-  ].join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   const userContent = [
     history ? `Recent chat:\n${history}\n` : '',
-    `Student question:\n${ctx.message}`,
+    `Help mode: ${mode}${guide ? ' · guide without giving the answer' : ''}`,
+    `Student request:\n${ctx.message}`,
     '',
     `Relevant notes from the student's flashcards:\n${notesBlock}`,
   ]
@@ -193,28 +218,84 @@ async function askCloudTutor(ctx: TutorContext): Promise<string | null> {
   const reply = await generateAiText({
     system,
     user: userContent,
-    temperature: 0.4,
+    temperature: guide || mode === 'hint' || mode === 'test' ? 0.5 : 0.4,
   });
   return reply ? sanitizeStudyText(reply) : null;
 }
 
 function answerFromNotes(ctx: TutorContext): string {
+  const mode: TutorMode = ctx.mode ?? 'explain';
+  const guide = ctx.guideWithoutAnswer === true;
   const { topic, notes } = gatherRelevantNotes(ctx);
   const question = ctx.message.trim();
   const lower = question.toLowerCase();
+
+  if (guide || mode === 'hint') {
+    const best = notes.find((n) => n.score > 0);
+    const focus = best?.question ?? topic;
+    return (
+      `Let's work through it together.\n\n` +
+      `What information does the problem (or topic “${focus}”) already give you?\n\n` +
+      `Name one fact you know for sure, and I’ll help you take the next step — without handing you the full answer.`
+    );
+  }
+
+  if (mode === 'test') {
+    const best = notes.find((n) => n.score > 0);
+    if (best) {
+      return (
+        `Quick check on ${topic}:\n\n` +
+        `In your own words, what is “${best.question}”?\n\n` +
+        `Reply with your answer and I’ll help you check it.`
+      );
+    }
+    return (
+      `Quick check on ${topic}:\n\n` +
+      `What’s one key idea from your notes you can explain without looking?\n\n` +
+      `Send your answer and we’ll review it together.`
+    );
+  }
 
   const matched = notes.filter((n) => n.score > 0);
   if (matched.length > 0) {
     const best = matched[0];
     const extras = matched.slice(1, 3);
-    let reply = best.answer.trim();
 
+    if (mode === 'summarize') {
+      const lines = [best, ...extras].map((n) => `• ${n.question}: ${n.answer}`);
+      return `Here’s a short summary for ${topic}:\n${lines.join('\n')}`;
+    }
+
+    if (mode === 'example') {
+      return (
+        `Example for “${best.question}”:\n\n` +
+        `${best.answer}\n\n` +
+        `Try restating that example in one sentence to lock it in.`
+      );
+    }
+
+    if (mode === 'explain_simply') {
+      return (
+        `In simple terms — ${best.question}:\n\n` +
+        `${best.answer}\n\n` +
+        `Think of it as one main idea you can say out loud in under 20 seconds.`
+      );
+    }
+
+    if (mode === 'another_way') {
+      return (
+        `Another way to look at “${best.question}”:\n\n` +
+        `${best.answer}\n\n` +
+        `Picture teaching this to a friend who never heard the term before — what would you say first?`
+      );
+    }
+
+    let reply = best.answer.trim();
     if (extras.length) {
       reply +=
         `\n\nRelated points:\n` +
         extras.map((n) => `• ${n.answer}`).join('\n');
     }
-
     return reply;
   }
 
@@ -280,6 +361,9 @@ export async function answerTutorQuestion(
   ctx: TutorContext,
 ): Promise<TutorReply> {
   const text = ctx.message.trim();
+  const mode: TutorMode = ctx.mode ?? 'explain';
+  const guide = ctx.guideWithoutAnswer === true;
+
   if (!text) {
     return {
       reply: "Ask me anything about your notes — I'll explain it step by step.",
@@ -287,13 +371,15 @@ export async function answerTutorQuestion(
     };
   }
 
+  const allowByMode = modeAllowsFlashcards(mode, guide);
+
   try {
     const cloud = await askCloudTutor({ ...ctx, message: text });
     if (cloud) {
       const reply = sanitizeStudyText(cloud);
       return {
         reply,
-        allow_flashcards: isFlashcardWorthyTutorReply(reply),
+        allow_flashcards: allowByMode && isFlashcardWorthyTutorReply(reply),
       };
     }
   } catch (error) {
@@ -308,13 +394,13 @@ export async function answerTutorQuestion(
     const reply = sanitizeStudyText(answerFromNotes({ ...ctx, message: text }));
     return {
       reply,
-      allow_flashcards: isFlashcardWorthyTutorReply(reply),
+      allow_flashcards: allowByMode && isFlashcardWorthyTutorReply(reply),
     };
   }
 
   const reply = sanitizeStudyText(answerFromNotes({ ...ctx, message: text }));
   return {
     reply,
-    allow_flashcards: isFlashcardWorthyTutorReply(reply),
+    allow_flashcards: allowByMode && isFlashcardWorthyTutorReply(reply),
   };
 }

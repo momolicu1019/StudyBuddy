@@ -1,6 +1,10 @@
-import type { Flashcard, QuizQuestion } from '../api/types';
+import type { Flashcard, QuizQuestion, QuizQuestionKind } from '../api/types';
 import { isAiConfigured, usesGemini } from './aiConfig';
 import { friendlyAiError, generateAiText, generateWithGemini } from './geminiClient';
+import {
+  kindsForQuizType,
+  type QuizType,
+} from './quizTypes';
 
 const FALLBACK_DISTRACTORS = [
   'Not enough information',
@@ -11,7 +15,7 @@ const FALLBACK_DISTRACTORS = [
   'Cannot be determined from the notes',
 ];
 
-export const QUIZ_SIZE = 20;
+export const QUIZ_SIZE = 10;
 
 function shuffle<T>(items: T[]): T[] {
   const arr = [...items];
@@ -35,6 +39,50 @@ function uniqueStrings(values: string[], except?: string): string[] {
     out.push(cleaned);
   }
   return out;
+}
+
+function normalizeAnswerText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[•\-]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Loose match for typed / fill-in answers. */
+export function answersMatch(expected: string, given: string): boolean {
+  const a = normalizeAnswerText(expected);
+  const b = normalizeAnswerText(given);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.includes(b) && b.length >= Math.min(4, a.length)) return true;
+  if (b.includes(a) && a.length >= 3) return true;
+
+  const aTokens = a.split(' ').filter(Boolean);
+  const bTokens = new Set(b.split(' ').filter(Boolean));
+  if (aTokens.length >= 2) {
+    const overlap = aTokens.filter((t) => bTokens.has(t)).length;
+    if (overlap / aTokens.length >= 0.7) return true;
+  }
+  return false;
+}
+
+function shortAnswerFromCard(card: Flashcard): string {
+  const bullets = card.answer
+    .split(/\n+/)
+    .map((line) => line.replace(/^[•\-]\s*/, '').trim())
+    .filter(Boolean);
+  const first = bullets[0] ?? card.answer.trim();
+  // Prefer a compact answer for typing / blanks.
+  const sentence = first.split(/(?<=[.!?])\s+/)[0] ?? first;
+  if (sentence.length <= 80) return sentence;
+  return sentence.slice(0, 77).replace(/\s+\S*$/, '').trim();
+}
+
+function topicFromCard(card: Flashcard): string {
+  const title = card.question.replace(/\?+$/g, '').trim();
+  return title.length > 48 ? `${title.slice(0, 45).trim()}…` : title;
 }
 
 function buildOptions(correctAnswer: string, poolAnswers: string[]): {
@@ -121,9 +169,34 @@ function normalizeCorrectIndex(
   return 0;
 }
 
+function kindFromRow(row: Record<string, unknown>, fallback: QuizQuestionKind): QuizQuestionKind {
+  const raw = String(row.kind ?? row.type ?? fallback)
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (
+    raw === 'multiple_choice' ||
+    raw === 'mcq' ||
+    raw === 'multiplechoice'
+  ) {
+    return 'multiple_choice';
+  }
+  if (raw === 'typed_answer' || raw === 'typed' || raw === 'short_answer') {
+    return 'typed_answer';
+  }
+  if (raw === 'true_false' || raw === 'truefalse' || raw === 'tf') {
+    return 'true_false';
+  }
+  if (raw === 'fill_blank' || raw === 'fill_in_the_blank' || raw === 'blank') {
+    return 'fill_blank';
+  }
+  return fallback;
+}
+
 export function parseGeminiQuizQuestions(
   raw: string,
   size: number = QUIZ_SIZE,
+  defaultKind: QuizQuestionKind = 'multiple_choice',
 ): QuizQuestion[] {
   const parsed = parseJsonPayload(raw);
   if (!parsed) return [];
@@ -140,38 +213,77 @@ export function parseGeminiQuizQuestions(
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const row = item as Record<string, unknown>;
+    const kind = kindFromRow(row, defaultKind);
     const question = String(row.question ?? row.stem ?? row.prompt ?? '').trim();
-    const optionsRaw = Array.isArray(row.options)
-      ? row.options
-      : Array.isArray(row.choices)
-        ? row.choices
-        : [];
-    const options = optionsRaw
-      .map((o) => String(o ?? '').trim())
-      .filter(Boolean)
-      .slice(0, 4);
+    const topic = String(row.topic ?? row.concept ?? '').trim() || undefined;
+    const correctText = String(
+      row.correct_text ?? row.correct_answer ?? row.answer_text ?? '',
+    ).trim();
 
-    if (!question || options.length < 2) continue;
+    if (!question) continue;
 
-    while (options.length < 4) {
-      options.push(`Option ${String.fromCharCode(65 + options.length)}`);
+    if (kind === 'typed_answer' || kind === 'fill_blank') {
+      if (!correctText) continue;
+      questions.push({
+        id: 10_000 + questions.length + 1,
+        kind,
+        question,
+        options: [],
+        correct_index: 0,
+        correct_text: correctText,
+        topic,
+      });
+    } else if (kind === 'true_false') {
+      const options = ['True', 'False'];
+      let correct_index = normalizeCorrectIndex(row, options);
+      const tf = String(row.correct_text ?? row.correct_answer ?? '')
+        .trim()
+        .toLowerCase();
+      if (tf === 'true') correct_index = 0;
+      if (tf === 'false') correct_index = 1;
+      questions.push({
+        id: 10_000 + questions.length + 1,
+        kind: 'true_false',
+        question,
+        options,
+        correct_index,
+        correct_text: options[correct_index],
+        topic,
+      });
+    } else {
+      const optionsRaw = Array.isArray(row.options)
+        ? row.options
+        : Array.isArray(row.choices)
+          ? row.choices
+          : [];
+      const options = optionsRaw
+        .map((o) => String(o ?? '').trim())
+        .filter(Boolean)
+        .slice(0, 4);
+
+      if (options.length < 2) continue;
+      while (options.length < 4) {
+        options.push(`Option ${String.fromCharCode(65 + options.length)}`);
+      }
+
+      const correct_index = normalizeCorrectIndex(row, options);
+      const correctOption = options[correct_index] ?? options[0];
+      const shuffled = shuffle(options);
+      const newCorrect = Math.max(
+        0,
+        shuffled.findIndex((o) => o === correctOption),
+      );
+
+      questions.push({
+        id: 10_000 + questions.length + 1,
+        kind: 'multiple_choice',
+        question,
+        options: shuffled,
+        correct_index: newCorrect,
+        correct_text: shuffled[newCorrect],
+        topic,
+      });
     }
-
-    const correct_index = normalizeCorrectIndex(row, options);
-    // Shuffle options while preserving correctness.
-    const correctText = options[correct_index] ?? options[0];
-    const shuffled = shuffle(options);
-    const newCorrect = Math.max(
-      0,
-      shuffled.findIndex((o) => o === correctText),
-    );
-
-    questions.push({
-      id: 10_000 + questions.length + 1,
-      question,
-      options: shuffled,
-      correct_index: newCorrect,
-    });
 
     if (questions.length >= size) break;
   }
@@ -179,30 +291,124 @@ export function parseGeminiQuizQuestions(
   return questions;
 }
 
+function pickBlankWord(text: string): { blanked: string; answer: string } | null {
+  const words = text
+    .replace(/[•\-]/g, ' ')
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ''))
+    .filter((w) => w.length >= 4 && !/^(this|that|with|from|have|been|were|they|their|about)$/i.test(w));
+  if (!words.length) return null;
+  const answer = words[Math.floor(Math.random() * words.length)];
+  const blanked = text.replace(new RegExp(`\\b${answer}\\b`, 'i'), '_____');
+  if (blanked === text) return null;
+  return { blanked, answer };
+}
+
+function buildLocalQuestion(
+  card: Flashcard,
+  kind: QuizQuestionKind,
+  allAnswers: string[],
+  id: number,
+): QuizQuestion {
+  const topic = topicFromCard(card);
+  const short = shortAnswerFromCard(card);
+
+  if (kind === 'true_false') {
+    const makeTrue = Math.random() > 0.45;
+    if (makeTrue) {
+      return {
+        id,
+        kind: 'true_false',
+        question: `${card.question}: ${short}`,
+        options: ['True', 'False'],
+        correct_index: 0,
+        correct_text: 'True',
+        topic,
+      };
+    }
+    const wrong = uniqueStrings(allAnswers, short)[0] ?? 'an unrelated idea';
+    return {
+      id,
+      kind: 'true_false',
+      question: `${card.question}: ${wrong}`,
+      options: ['True', 'False'],
+      correct_index: 1,
+      correct_text: 'False',
+      topic,
+    };
+  }
+
+  if (kind === 'typed_answer') {
+    return {
+      id,
+      kind: 'typed_answer',
+      question: card.question.trim().endsWith('?')
+        ? card.question
+        : `In your own words, what is “${card.question}”?`,
+      options: [],
+      correct_index: 0,
+      correct_text: short,
+      topic,
+    };
+  }
+
+  if (kind === 'fill_blank') {
+    const blank = pickBlankWord(short) ?? pickBlankWord(card.answer);
+    if (blank) {
+      return {
+        id,
+        kind: 'fill_blank',
+        question: `Fill in the blank about “${card.question}”:\n${blank.blanked}`,
+        options: [],
+        correct_index: 0,
+        correct_text: blank.answer,
+        topic,
+      };
+    }
+    return {
+      id,
+      kind: 'fill_blank',
+      question: `Fill in the blank: “${card.question}” is _____.`,
+      options: [],
+      correct_index: 0,
+      correct_text: short.split(/\s+/).slice(0, 4).join(' ') || card.question,
+      topic,
+    };
+  }
+
+  const stem = card.question.trim().endsWith('?')
+    ? card.question
+    : `Which statement best matches “${card.question}”?`;
+  const { options, correct_index } = buildOptions(card.answer, allAnswers);
+  return {
+    id,
+    kind: 'multiple_choice',
+    question: stem,
+    options,
+    correct_index,
+    correct_text: options[correct_index],
+    topic,
+  };
+}
+
 /**
- * Local fallback: build MCQs from flashcards (used if Gemini is unavailable).
+ * Local fallback: build quiz questions of the requested kinds from flashcards.
  */
 export function buildQuizQuestions(
   cards: Flashcard[],
   size: number = QUIZ_SIZE,
+  quizType: QuizType = 'multiple_choice',
 ): QuizQuestion[] {
   if (!cards.length) return [];
 
+  const kinds = kindsForQuizType(quizType);
   const selected = shuffle(cards).slice(0, Math.min(size, cards.length));
   const allAnswers = cards.map((c) => c.answer);
 
+  // For mixed quizzes, cycle kinds; otherwise reuse the single kind.
   return selected.map((card, i) => {
-    // Avoid “Key point: {title}” definition quizzes when possible.
-    const stem = card.question.trim().endsWith('?')
-      ? card.question
-      : `Which statement best matches “${card.question}”?`;
-    const { options, correct_index } = buildOptions(card.answer, allAnswers);
-    return {
-      id: 20_000 + i + 1,
-      question: stem,
-      options,
-      correct_index,
-    };
+    const kind = kinds[i % kinds.length];
+    return buildLocalQuestion(card, kind, allAnswers, 20_000 + i + 1);
   });
 }
 
@@ -217,46 +423,88 @@ function cardsToPromptBlock(cards: Flashcard[], limit = 40): string {
     .join('\n\n');
 }
 
+function promptForQuizType(quizType: QuizType, count: number): string {
+  const base = [
+    'You are Study Buddy, an exam writer.',
+    'Create quiz questions from the student flashcard notes.',
+    'Return ONLY valid JSON with this shape:',
+    '{ "questions": [ { "kind": string, "question": string, "options": string[] | null, "correct_index": number | null, "correct_text": string | null, "topic": string } ] }',
+    'Rules:',
+    `- Create exactly ${count} questions when possible.`,
+    '- Randomize topics across the notes; do not go in flashcard order.',
+    '- Do NOT ask “What is the definition of …” for the key-point title alone.',
+    '- Prefer application, comparison, cause/effect, process steps, or scenario questions when the kind allows it.',
+    '- Keep questions concise and exam-like.',
+    '- topic should be a short concept name from the notes (for review lists).',
+  ];
+
+  switch (quizType) {
+    case 'multiple_choice':
+      return [
+        ...base,
+        'kind must be "multiple_choice" for every question.',
+        'Each question needs exactly 4 options and correct_index 0-based (0..3).',
+        'Wrong options should be realistic misconceptions.',
+      ].join(' ');
+    case 'typed_answer':
+      return [
+        ...base,
+        'kind must be "typed_answer" for every question.',
+        'options should be null/empty. Put the expected short answer in correct_text (a few words or one short sentence).',
+      ].join(' ');
+    case 'true_false':
+      return [
+        ...base,
+        'kind must be "true_false" for every question.',
+        'options must be ["True","False"]. correct_index is 0 for True or 1 for False.',
+        'Mix true and false statements. False statements should be plausible but wrong.',
+      ].join(' ');
+    case 'fill_blank':
+      return [
+        ...base,
+        'kind must be "fill_blank" for every question.',
+        'Put a blank as _____ in the question. correct_text is the missing word or short phrase.',
+        'options should be null/empty.',
+      ].join(' ');
+    case 'mixed':
+      return [
+        ...base,
+        'Mix kinds across the set: multiple_choice, typed_answer, true_false, and fill_blank.',
+        'For multiple_choice: 4 options + correct_index.',
+        'For true_false: options ["True","False"] + correct_index.',
+        'For typed_answer and fill_blank: correct_text required; options empty.',
+      ].join(' ');
+  }
+}
+
 /**
- * Ask Gemini to create up to 20 randomized MCQs from flashcard knowledge.
- * Questions should test understanding — not ask for the key-point definition.
+ * Ask Gemini (or local fallback) to create quiz questions for a quiz type.
  */
 export async function buildQuizQuestionsViaGemini(
   cards: Flashcard[],
   size: number = QUIZ_SIZE,
+  quizType: QuizType = 'multiple_choice',
 ): Promise<{ questions: QuizQuestion[]; usedAi: boolean; error?: string }> {
   if (!cards.length) {
     return { questions: [], usedAi: false, error: 'No flashcards available' };
   }
 
+  const targetSize = Math.min(size, Math.max(1, cards.length * 2));
+
   if (!isAiConfigured()) {
     return {
-      questions: buildQuizQuestions(cards, size),
+      questions: buildQuizQuestions(cards, targetSize, quizType),
       usedAi: false,
     };
   }
 
-  const count = Math.min(size, Math.max(5, Math.min(20, cards.length * 2)));
+  const count = Math.min(targetSize, Math.max(5, Math.min(20, cards.length * 2)));
+  const defaultKind = kindsForQuizType(quizType)[0];
 
   try {
-    const system = [
-      'You are Study Buddy, an exam writer.',
-      'Create multiple-choice quiz questions from the student flashcard notes.',
-      'Return ONLY valid JSON with this shape:',
-      '{ "questions": [ { "question": string, "options": [string, string, string, string], "correct_index": number } ] }',
-      'correct_index is 0-based (0..3).',
-      'Rules:',
-      '- Create exactly the requested number of questions when possible.',
-      '- Randomize topics across the notes; do not go in flashcard order.',
-      '- Do NOT ask “What is the definition of …” or “Define …” for the key-point title.',
-      '- Do NOT use the key-point title alone as the question with its explanation as the obvious answer.',
-      '- Prefer application, comparison, cause/effect, process steps, true implication, or scenario questions.',
-      '- Each question must have exactly 4 plausible options and one clearly correct answer grounded in the notes.',
-      '- Wrong options should be realistic misconceptions, not nonsense.',
-      '- Keep questions concise and exam-like.',
-    ].join(' ');
+    const system = promptForQuizType(quizType, count);
     const user = [
-      `Create ${count} multiple-choice questions from these study notes:`,
+      `Create ${count} ${quizType.replace(/_/g, ' ')} questions from these study notes:`,
       '',
       cardsToPromptBlock(cards),
     ].join('\n');
@@ -272,19 +520,19 @@ export async function buildQuizQuestionsViaGemini(
           temperature: 0.55,
         });
 
-    const questions = parseGeminiQuizQuestions(raw, size);
-    if (questions.length >= Math.min(5, count)) {
-      return { questions: questions.slice(0, size), usedAi: true };
+    const questions = parseGeminiQuizQuestions(raw, targetSize, defaultKind);
+    if (questions.length >= Math.min(5, count, targetSize)) {
+      return { questions: questions.slice(0, targetSize), usedAi: true };
     }
 
     return {
-      questions: buildQuizQuestions(cards, size),
+      questions: buildQuizQuestions(cards, targetSize, quizType),
       usedAi: false,
       error: 'AI returned too few quiz questions',
     };
   } catch (error) {
     return {
-      questions: buildQuizQuestions(cards, size),
+      questions: buildQuizQuestions(cards, targetSize, quizType),
       usedAi: false,
       error: friendlyAiError(error),
     };

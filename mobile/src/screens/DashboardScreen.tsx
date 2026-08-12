@@ -14,7 +14,11 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 import { api } from '../api/client';
-import type { GenerateDraftResponse, Subject } from '../api/types';
+import type { DraftFlashcard, GenerateDraftResponse, Subject } from '../api/types';
+import {
+  AiDraftReviewFlow,
+  type AiDraftPhase,
+} from '../components/AiDraftReviewFlow';
 import {
   AppModal,
   Card,
@@ -71,7 +75,9 @@ export function DashboardScreen() {
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [creatingFolder, setCreatingFolder] = useState(false);
-  const [draft, setDraft] = useState<GenerateDraftResponse | null>(null);
+  const [draftMeta, setDraftMeta] = useState<GenerateDraftResponse | null>(null);
+  const [draftCards, setDraftCards] = useState<DraftFlashcard[]>([]);
+  const [draftPhase, setDraftPhase] = useState<AiDraftPhase>('summary');
   const [saveFolderId, setSaveFolderId] = useState<number | null>(null);
   const [savedSubject, setSavedSubject] = useState<Subject | null>(null);
   const [folderName, setFolderName] = useState('');
@@ -79,6 +85,16 @@ export function DashboardScreen() {
   const [deadlineBulb, setDeadlineBulb] = useState(false);
   const [deadlineSectionUrgency, setDeadlineSectionUrgency] =
     useState<NearingUrgency | null>(null);
+
+  const draftOpen = draftMeta != null && draftCards.length > 0;
+
+  function clearDraft() {
+    setDraftMeta(null);
+    setDraftCards([]);
+    setDraftPhase('summary');
+    setSaveFolderId(null);
+    setCreatingFolder(false);
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -124,7 +140,7 @@ export function DashboardScreen() {
       fallback: 'pdf',
     });
     setSelectedSource({ name: asset.name, type: kind, uri: asset.uri });
-    setDraft(null);
+    clearDraft();
     setSavedSubject(null);
     showToast(`${shortLabelForSource(kind)} ready — tap Generate Flashcards`);
   }
@@ -135,7 +151,7 @@ export function DashboardScreen() {
       type: 'photo',
       uri: asset.uri,
     });
-    setDraft(null);
+    clearDraft();
     setSavedSubject(null);
     showToast('Photo ready — tap Generate Flashcards');
   }
@@ -191,10 +207,12 @@ export function DashboardScreen() {
         selectedSource.name,
         selectedSource.uri,
       );
-      setDraft(result);
+      setDraftMeta(result);
+      setDraftCards(result.cards);
+      setDraftPhase('summary');
       setSaveFolderId(subjects[0]?.id ?? null);
       setSelectedSource(null);
-      showToast(`${result.count} flashcards ready to save`);
+      showToast(`${result.count} flashcards ready to review`);
     } catch (error) {
       const detail =
         error instanceof Error ? error.message : 'Could not generate flashcards.';
@@ -224,7 +242,7 @@ export function DashboardScreen() {
   }
 
   async function onSaveDraft() {
-    if (!draft) return;
+    if (!draftCards.length) return;
     if (!saveFolderId) {
       showToast('Create or select a folder first');
       startInlineCreateFolder();
@@ -233,10 +251,11 @@ export function DashboardScreen() {
 
     setSaving(true);
     try {
-      const result = await saveDraftFlashcards(saveFolderId, draft.cards);
+      const result = await saveDraftFlashcards(saveFolderId, draftCards, {
+        sourceId: draftMeta?.source_id,
+      });
       setSavedSubject(result.subject);
-      setDraft(null);
-      setSaveFolderId(null);
+      clearDraft();
       showToast(result.message);
     } catch {
       showToast('Could not save flashcards. Try again.');
@@ -263,7 +282,7 @@ export function DashboardScreen() {
             <Text style={styles.sub}>What would you like to study today?</Text>
           </View>
           <PrimaryButton
-            label="Ask AI Tutor"
+            label="✨ AI Tutor"
             onPress={() => navigation.navigate('AITutor', {})}
             style={{ marginTop: 8 }}
           />
@@ -273,7 +292,7 @@ export function DashboardScreen() {
           <IconBubble size={58}>📚</IconBubble>
           <Text style={styles.uploadTitle}>Create flashcards from your notes</Text>
           <Text style={styles.subCenter}>
-            Upload a study file, take a photo, or choose a photo from your phone
+            Upload a study file, take a photo, choose a photo, or type notes without AI
           </Text>
           <PrimaryButton
             label="📄 Upload file"
@@ -294,6 +313,12 @@ export function DashboardScreen() {
               style={styles.flexBtn}
             />
           </View>
+          <PrimaryButton
+            label="✍️ Type Notes"
+            onPress={() => navigation.navigate('TypeNotes')}
+            variant="secondary"
+            style={{ marginTop: 10, alignSelf: 'stretch' }}
+          />
 
           {selectedSource && (
             <View style={styles.sourceBox}>
@@ -338,7 +363,7 @@ export function DashboardScreen() {
             {
               icon: '🧠',
               title: 'Quiz Mode',
-              desc: 'Test what you know and track your score.',
+              desc: 'Multiple choice, typed answer, true/false, fill-in, or mixed.',
               onPress: () => navigation.navigate('Quiz', {}),
               showBulb: false,
               highlight: null as NearingUrgency | null,
@@ -352,9 +377,25 @@ export function DashboardScreen() {
               highlight: deadlineSectionUrgency,
             },
             {
+              icon: '📊',
+              title: 'My Progress',
+              desc: 'Weekly study chart, quiz accuracy, and subject strengths.',
+              onPress: () => navigation.navigate('Progress'),
+              showBulb: false,
+              highlight: null as NearingUrgency | null,
+            },
+            {
+              icon: '💾',
+              title: 'Storage',
+              desc: 'See what uses space and manage uploaded files.',
+              onPress: () => navigation.navigate('Storage'),
+              showBulb: false,
+              highlight: null as NearingUrgency | null,
+            },
+            {
               icon: '✨',
               title: 'AI Tutor',
-              desc: 'Ask questions and get step-by-step help.',
+              desc: 'Pick a help mode — explain, hint, quiz, or learn without the answer.',
               onPress: () => navigation.navigate('AITutor', {}),
               showBulb: false,
               highlight: null as NearingUrgency | null,
@@ -400,15 +441,18 @@ export function DashboardScreen() {
         <Text style={[styles.h2, { marginTop: 8, marginBottom: 14 }]}>
           Your study progress
         </Text>
+        <Pressable onPress={() => navigation.navigate('Progress')}>
+          <Text style={styles.progressLink}>📊 View My Progress ›</Text>
+        </Pressable>
         {!hasProgress ? (
-          <Card style={{ marginBottom: 8 }}>
+          <Card style={{ marginBottom: 8, marginTop: 10 }}>
             <Text style={styles.sub}>
               Progress appears after you upload notes, study flashcards, take a quiz,
               or finish a focus session.
             </Text>
           </Card>
         ) : null}
-        <View style={styles.stats}>
+        <View style={[styles.stats, !hasProgress ? null : { marginTop: 10 }]}>
           <Card style={styles.stat}>
             <Text style={styles.statValue}>{stats.flashcards_reviewed}</Text>
             <Text style={styles.statLabel}>Flashcards reviewed</Text>
@@ -419,9 +463,16 @@ export function DashboardScreen() {
           </Card>
           <Card style={[styles.stat, { width: '100%' }]}>
             <Text style={styles.statValue}>{stats.focus_hours}h</Text>
-            <Text style={styles.statLabel}>This week's focus time</Text>
+            <Text style={styles.statLabel}>Total focus time</Text>
           </Card>
         </View>
+
+        <PrimaryButton
+          label="📊 Open My Progress"
+          variant="secondary"
+          onPress={() => navigation.navigate('Progress')}
+          style={{ marginTop: 12, alignSelf: 'stretch' }}
+        />
 
         <Card style={{ marginTop: 16, marginBottom: 30 }}>
           <Text style={styles.h2}>Focus session</Text>
@@ -436,128 +487,126 @@ export function DashboardScreen() {
       </ScrollView>
 
       <AppModal
-        visible={!!draft}
+        visible={draftOpen}
         onClose={() => {
-          setDraft(null);
-          setSaveFolderId(null);
-          setCreatingFolder(false);
+          if (saving) return;
+          clearDraft();
         }}
       >
-        <Text style={styles.h2}>✨ Flashcards generated!</Text>
-        <Text style={[styles.sub, { marginTop: 8 }]}>{draft?.message}</Text>
-        {draft?.warning ? (
-          <Text style={[styles.sub, { marginTop: 8, color: '#B45309' }]}>
-            {draft.warning}
-          </Text>
-        ) : null}
-        <View style={styles.sample}>
-          <Text style={{ fontWeight: '700', color: colors.ink }}>
-            Sample key point · {draft?.count ?? 0} cards
-            {draft?.extraction_method === 'ocr'
-              ? ' from photo text'
-              : ' from Gemini'}
-          </Text>
-          {draft?.overview ? (
-            <Text style={[styles.sub, { marginTop: 8 }]}>
-              Analysis overview: {draft.overview}
-            </Text>
-          ) : null}
-          <Text style={{ marginTop: 10, fontWeight: '700' }}>
-            {draft?.sample_question}
-          </Text>
-          <Text style={[styles.sub, { marginTop: 6 }]}>{draft?.sample_answer}</Text>
-        </View>
+        <AiDraftReviewFlow
+          cards={draftCards}
+          onChangeCards={setDraftCards}
+          phase={draftPhase}
+          onPhaseChange={setDraftPhase}
+          onDiscard={clearDraft}
+          subtitle={
+            draftMeta?.overview
+              ? `Overview: ${draftMeta.overview}`
+              : draftMeta?.message
+          }
+          warning={draftMeta?.warning}
+          saveSlot={
+            <>
+              <Text
+                style={[
+                  styles.sub,
+                  { marginTop: 16, marginBottom: 8, fontWeight: '700' },
+                ]}
+              >
+                Save to subject
+              </Text>
 
-        <Text style={[styles.sub, { marginTop: 16, marginBottom: 8, fontWeight: '700' }]}>
-          Save to subject
-        </Text>
+              {creatingFolder || subjects.length === 0 ? (
+                <View style={styles.inlineEmpty}>
+                  <Text style={styles.sub}>
+                    {subjects.length === 0
+                      ? 'No subjects yet. Create one to save these flashcards.'
+                      : 'Name your new subject.'}
+                  </Text>
+                  <SearchInput
+                    value={folderName}
+                    onChangeText={setFolderName}
+                    placeholder="e.g. Biology"
+                    style={styles.folderNameInput}
+                  />
+                  <View style={[styles.subjectChips, { marginTop: 12 }]}>
+                    {FOLDER_ICONS.map((icon) => (
+                      <Pressable
+                        key={icon}
+                        onPress={() => setFolderIcon(icon)}
+                        style={[
+                          styles.chip,
+                          folderIcon === icon && styles.chipActive,
+                        ]}
+                      >
+                        <Text style={{ fontSize: 18 }}>{icon}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <View style={[styles.row, { marginTop: 12 }]}>
+                    {subjects.length > 0 ? (
+                      <PrimaryButton
+                        label="Back"
+                        variant="secondary"
+                        onPress={() => setCreatingFolder(false)}
+                        style={styles.flexBtn}
+                      />
+                    ) : null}
+                    <PrimaryButton
+                      label="Create subject"
+                      onPress={createFolderInline}
+                      style={styles.flexBtn}
+                    />
+                  </View>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.subjectChips}>
+                    {subjects.map((s) => (
+                      <Pressable
+                        key={s.id}
+                        onPress={() => setSaveFolderId(s.id)}
+                        style={[
+                          styles.chip,
+                          saveFolderId === s.id && styles.chipActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            saveFolderId === s.id && styles.chipTextActive,
+                          ]}
+                        >
+                          {s.icon} {s.name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <PrimaryButton
+                    label="+ New subject"
+                    variant="secondary"
+                    onPress={startInlineCreateFolder}
+                    style={{ marginTop: 10 }}
+                  />
+                </>
+              )}
 
-        {creatingFolder || subjects.length === 0 ? (
-          <View style={styles.inlineEmpty}>
-            <Text style={styles.sub}>
-              {subjects.length === 0
-                ? 'No subjects yet. Create one to save these flashcards.'
-                : 'Name your new subject.'}
-            </Text>
-            <SearchInput
-              value={folderName}
-              onChangeText={setFolderName}
-              placeholder="e.g. Biology"
-              style={styles.folderNameInput}
-            />
-            <View style={[styles.subjectChips, { marginTop: 12 }]}>
-              {FOLDER_ICONS.map((icon) => (
-                <Pressable
-                  key={icon}
-                  onPress={() => setFolderIcon(icon)}
-                  style={[styles.chip, folderIcon === icon && styles.chipActive]}
-                >
-                  <Text style={{ fontSize: 18 }}>{icon}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <View style={[styles.row, { marginTop: 12 }]}>
-              {subjects.length > 0 ? (
+              <View style={[styles.row, { marginTop: 20 }]}>
                 <PrimaryButton
-                  label="Back"
+                  label="Discard"
                   variant="secondary"
-                  onPress={() => setCreatingFolder(false)}
+                  onPress={clearDraft}
                   style={styles.flexBtn}
                 />
-              ) : null}
-              <PrimaryButton
-                label="Create subject"
-                onPress={createFolderInline}
-                style={styles.flexBtn}
-              />
-            </View>
-          </View>
-        ) : (
-          <>
-            <View style={styles.subjectChips}>
-              {subjects.map((s) => (
-                <Pressable
-                  key={s.id}
-                  onPress={() => setSaveFolderId(s.id)}
-                  style={[styles.chip, saveFolderId === s.id && styles.chipActive]}
-                >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      saveFolderId === s.id && styles.chipTextActive,
-                    ]}
-                  >
-                    {s.icon} {s.name}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            <PrimaryButton
-              label="+ New subject"
-              variant="secondary"
-              onPress={startInlineCreateFolder}
-              style={{ marginTop: 10 }}
-            />
-          </>
-        )}
-
-        <View style={[styles.row, { marginTop: 20 }]}>
-          <PrimaryButton
-            label="Discard"
-            variant="secondary"
-            onPress={() => {
-              setDraft(null);
-              setSaveFolderId(null);
-              setCreatingFolder(false);
-            }}
-            style={styles.flexBtn}
-          />
-          <PrimaryButton
-            label={saving ? 'Saving…' : 'Save flashcards'}
-            onPress={onSaveDraft}
-            style={styles.flexBtn}
-          />
-        </View>
+                <PrimaryButton
+                  label={saving ? 'Saving…' : 'Save flashcards'}
+                  onPress={() => void onSaveDraft()}
+                  style={styles.flexBtn}
+                />
+              </View>
+            </>
+          }
+        />
       </AppModal>
 
       <AppModal visible={!!savedSubject} onClose={() => setSavedSubject(null)}>
@@ -603,6 +652,12 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   h2: { fontSize: 20, fontWeight: '800', color: colors.ink, margin: 0 },
+  progressLink: {
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 14,
+    marginBottom: 4,
+  },
   sub: { color: colors.muted, fontSize: 14, lineHeight: 20 },
   subCenter: {
     color: colors.muted,
@@ -656,12 +711,6 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     width: '100%',
     minHeight: 52,
-  },
-  sample: {
-    marginTop: 14,
-    backgroundColor: '#F7F6FF',
-    borderRadius: 14,
-    padding: 14,
   },
   tiles: { marginTop: 18, gap: 12 },
   tile: {

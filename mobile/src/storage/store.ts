@@ -1,8 +1,26 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { EMPTY_LOCAL_DB, type LocalDatabase, type TutorChat } from './schema';
+import { EMPTY_LOCAL_DB, type ActivityDay, type LocalDatabase, type TutorChat } from './schema';
 
 const STORAGE_KEY = 'studybuddy.local.v1';
+
+function normalizeActivityDays(
+  raw: LocalDatabase['activity_days'] | null | undefined,
+): Record<string, ActivityDay> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, ActivityDay> = {};
+  for (const [date, value] of Object.entries(raw)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !value || typeof value !== 'object') {
+      continue;
+    }
+    out[date] = {
+      focus_minutes: Number(value.focus_minutes) || 0,
+      cards_reviewed: Number(value.cards_reviewed) || 0,
+      quizzes_taken: Number(value.quizzes_taken) || 0,
+    };
+  }
+  return out;
+}
 
 function normalizeTutorChat(raw: Partial<TutorChat>): TutorChat | null {
   if (typeof raw.id !== 'number') return null;
@@ -53,7 +71,14 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
   return {
     subjects: raw.subjects ?? [],
     flashcards: raw.flashcards ?? {},
-    pdfs: raw.pdfs ?? [],
+    pdfs: Array.isArray(raw.pdfs)
+      ? raw.pdfs.map((p) => ({
+          ...p,
+          keep: p.keep === true,
+          used_for_flashcards: p.used_for_flashcards === true,
+          bytes: typeof p.bytes === 'number' ? p.bytes : undefined,
+        }))
+      : [],
     progress: {
       flashcards_reviewed: raw.progress?.flashcards_reviewed ?? 0,
       quiz_average: raw.progress?.quiz_average ?? 0,
@@ -63,9 +88,12 @@ function normalize(raw: Partial<LocalDatabase> | null): LocalDatabase {
     quizzes: raw.quizzes ?? [],
     deadlines: Array.isArray(raw.deadlines) ? raw.deadlines : [],
     tutor_chats: tutorChats,
+    activity_days: normalizeActivityDays(raw.activity_days),
     settings: {
       cloud_sync_enabled: raw.settings?.cloud_sync_enabled ?? false,
       daily_goal_minutes: raw.settings?.daily_goal_minutes ?? 25,
+      delete_sources_after_flashcards:
+        raw.settings?.delete_sources_after_flashcards ?? false,
     },
     next_subject_id: raw.next_subject_id ?? 1,
     next_card_id: raw.next_card_id ?? 1,

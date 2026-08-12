@@ -28,6 +28,7 @@ import { labelForSource } from './sourceMime';
 import { loadLocalDb, updateLocalDb } from './store';
 import { generateFlashcardsViaGeminiPipeline } from './studyPipeline';
 import type { TutorMode } from './tutorModes';
+import type { QuizType } from './quizTypes';
 
 const MAX_TUTOR_CHATS = 40;
 
@@ -241,7 +242,10 @@ export const localBackend = {
     return { flashcard, subject, stats };
   },
 
-  async getQuiz(subjectId: number | number[]): Promise<QuizQuestion[]> {
+  async getQuiz(
+    subjectId: number | number[],
+    options?: { quizType?: QuizType; size?: number },
+  ): Promise<QuizQuestion[]> {
     const { buildQuizQuestionsViaGemini } = await import('./quizBuilder');
     const db = await loadLocalDb();
     const ids = (Array.isArray(subjectId) ? subjectId : [subjectId]).filter(
@@ -252,15 +256,18 @@ export const localBackend = {
     const cards = ids.flatMap((id) => db.flashcards[String(id)] ?? []);
     if (!cards.length) return [];
 
-    const result = await buildQuizQuestionsViaGemini(cards, 20);
+    const quizType = options?.quizType ?? 'multiple_choice';
+    const size = options?.size ?? 10;
+    const result = await buildQuizQuestionsViaGemini(cards, size, quizType);
     return result.questions;
   },
 
   async submitQuiz(
     subjectId: number | number[],
-    answers: Record<number, number>,
+    answers: Record<number, { selected_index?: number | null; text?: string | null }>,
     questions: QuizQuestion[],
   ): Promise<QuizResult> {
+    const { answersMatch } = await import('./quizBuilder');
     let result!: QuizResult;
     const ids = Array.isArray(subjectId) ? subjectId : [subjectId];
 
@@ -270,26 +277,57 @@ export const localBackend = {
       if (!questions.length) throw new Error('No quiz questions to grade');
 
       const reviews = questions.map((q) => {
+        const raw = answers[q.id];
         const selectedIndex =
-          answers[q.id] === undefined ? null : Number(answers[q.id]);
-        const isCorrect =
-          selectedIndex !== null && selectedIndex === q.correct_index;
+          raw?.selected_index === undefined || raw?.selected_index === null
+            ? null
+            : Number(raw.selected_index);
+        const typed = String(raw?.text ?? '').trim();
+
+        let isCorrect = false;
+        let selectedAnswer: string | null = null;
+        let correctAnswer =
+          q.correct_text?.trim() ||
+          q.options[q.correct_index] ||
+          '';
+
+        if (q.kind === 'typed_answer' || q.kind === 'fill_blank') {
+          selectedAnswer = typed || null;
+          isCorrect = Boolean(typed && answersMatch(correctAnswer, typed));
+        } else {
+          selectedAnswer =
+            selectedIndex === null ? null : (q.options[selectedIndex] ?? null);
+          isCorrect =
+            selectedIndex !== null && selectedIndex === q.correct_index;
+          correctAnswer = q.options[q.correct_index] ?? correctAnswer;
+        }
+
         return {
           id: q.id,
+          kind: q.kind,
           question: q.question,
           options: q.options,
           selected_index: selectedIndex,
           correct_index: q.correct_index,
           is_correct: isCorrect,
-          correct_answer: q.options[q.correct_index] ?? '',
-          selected_answer:
-            selectedIndex === null ? null : (q.options[selectedIndex] ?? null),
+          correct_answer: correctAnswer,
+          selected_answer: selectedAnswer,
+          topic: q.topic,
         };
       });
 
       const score = reviews.filter((r) => r.is_correct).length;
       const total = reviews.length;
       const percentage = total ? Math.round((score / total) * 100) : 0;
+
+      const topics_to_review = Array.from(
+        new Set(
+          reviews
+            .filter((r) => !r.is_correct)
+            .map((r) => (r.topic || '').trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 8);
 
       for (const review of reviews) {
         if (!review.is_correct) continue;
@@ -330,7 +368,7 @@ export const localBackend = {
         message = 'Solid effort. Review the missed cards and try again.';
       else message = 'Keep going! Study the flashcards, then retake the quiz.';
 
-      result = { score, total, percentage, message, reviews };
+      result = { score, total, percentage, message, reviews, topics_to_review };
     });
 
     return result;

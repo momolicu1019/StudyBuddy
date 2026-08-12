@@ -361,7 +361,7 @@ export function DashboardScreen() {
             {
               icon: '🧠',
               title: 'Quiz Mode',
-              desc: 'Test what you know and track your score.',
+              desc: 'Multiple choice, typed answer, true/false, fill-in, or mixed.',
               onPress: () => navigation.navigate('Quiz', {}),
               showBulb: false,
               highlight: null as NearingUrgency | null,

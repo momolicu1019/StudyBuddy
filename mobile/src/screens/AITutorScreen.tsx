@@ -31,6 +31,9 @@ import type { TutorChat } from '../storage/schema';
 import {
   isCloudTutorConfigured,
   isFlashcardWorthyTutorReply,
+  TUTOR_MODES,
+  tutorModeById,
+  type TutorMode,
 } from '../storage/tutorEngine';
 import { colors } from '../theme/colors';
 
@@ -45,12 +48,21 @@ type ChatItem = {
 
 const FOLDER_ICONS = ['📚', '🧬', '🔬', '➗', '🌎', '📖', '💻', '🎨'];
 
-function greetingMessage(subject: string | undefined, cloudReady: boolean): ChatItem {
+function greetingMessage(
+  subject: string | undefined,
+  cloudReady: boolean,
+  mode: TutorMode,
+  guideWithoutAnswer: boolean,
+): ChatItem {
+  const modeMeta = tutorModeById(mode);
+  const guideBit = guideWithoutAnswer
+    ? ' I will guide you with questions and will not hand you the final answer.'
+    : '';
   return {
     role: 'assistant',
     text: subject
-      ? `Hi! I'm your AI Tutor for ${subject}. Ask a real question and I'll answer it using your notes${cloudReady ? ' and AI' : ''}.`
-      : `Hi! I'm your Study Buddy AI Tutor. Ask a content question (for example “What is photosynthesis?”) and I'll answer it${cloudReady ? '' : ' from your flashcards'}.`,
+      ? `Hi! I'm your AI Tutor for ${subject}. Mode: ${modeMeta.icon} ${modeMeta.label}.${guideBit} Ask a question and I'll help${cloudReady ? '' : ' from your notes'}.`
+      : `Hi! I'm your Study Buddy AI Tutor. Pick how you want help below, then ask a question.${guideBit}${cloudReady ? '' : ' AI is offline — I’ll use your flashcards when I can.'}`,
   };
 }
 
@@ -84,11 +96,13 @@ export function AITutorScreen({ route }: Props) {
 
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [tutorMode, setTutorMode] = useState<TutorMode>('explain');
+  const [guideWithoutAnswer, setGuideWithoutAnswer] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [activeChatId, setActiveChatId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatItem[]>([
-    greetingMessage(subject, cloudReady),
+    greetingMessage(subject, cloudReady, 'explain', false),
   ]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState<TutorChat[]>([]);
@@ -174,13 +188,43 @@ export function AITutorScreen({ route }: Props) {
     setSaveFolderId(matchedSubjectId);
   }
 
+  const activeMode = tutorModeById(tutorMode);
+
   function startNewChat() {
     if (busy) return;
     setActiveChatId(null);
-    setMessages([greetingMessage(subject, cloudReady)]);
+    setMessages([
+      greetingMessage(subject, cloudReady, tutorMode, guideWithoutAnswer),
+    ]);
     setInput('');
     setHistoryOpen(false);
     showToast('Started a new chat');
+  }
+
+  function selectMode(mode: TutorMode) {
+    setTutorMode(mode);
+    // Refresh greeting only when still on the initial empty chat.
+    setMessages((prev) => {
+      if (prev.length === 1 && prev[0]?.role === 'assistant' && activeChatId == null) {
+        return [
+          greetingMessage(subject, cloudReady, mode, guideWithoutAnswer),
+        ];
+      }
+      return prev;
+    });
+  }
+
+  function toggleGuideWithoutAnswer() {
+    setGuideWithoutAnswer((prev) => {
+      const next = !prev;
+      setMessages((msgs) => {
+        if (msgs.length === 1 && msgs[0]?.role === 'assistant' && activeChatId == null) {
+          return [greetingMessage(subject, cloudReady, tutorMode, next)];
+        }
+        return msgs;
+      });
+      return next;
+    });
   }
 
   async function openHistoryChat(chat: TutorChat) {
@@ -212,7 +256,9 @@ export function AITutorScreen({ route }: Props) {
       await api.deleteTutorChat(id);
       if (activeChatIdRef.current === id) {
         setActiveChatId(null);
-        setMessages([greetingMessage(subject, cloudReady)]);
+        setMessages([
+          greetingMessage(subject, cloudReady, tutorMode, guideWithoutAnswer),
+        ]);
       }
       setDeleteChatId(null);
       await loadHistory();
@@ -267,7 +313,10 @@ export function AITutorScreen({ route }: Props) {
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setBusy(true);
     try {
-      const res = await api.askTutor(text, subject, history);
+      const res = await api.askTutor(text, subject, history, {
+        mode: tutorMode,
+        guideWithoutAnswer,
+      });
       const allowFlashcards =
         res.allow_flashcards ?? isFlashcardWorthyTutorReply(res.reply);
       setMessages((prev) => [
@@ -399,17 +448,60 @@ export function AITutorScreen({ route }: Props) {
         >
           <View style={styles.headerRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.h1}>✦ AI Tutor</Text>
+              <Text style={styles.h1}>✨ AI Tutor</Text>
               <Text style={styles.sub}>
-                Ask questions and get direct answers
-                {subject ? ` for ${subject}` : ''}.
-                {!cloudReady
-                  ? ' AI is offline on this device right now.'
-                  : ' AI is ready.'}{' '}
-                You can turn answers into flashcards.
+                What would you like help with?
+                {subject ? ` (${subject})` : ''}
+                {!cloudReady ? ' AI is offline on this device right now.' : ''}
               </Text>
             </View>
           </View>
+
+          <Text style={styles.modeHeading}>Help modes</Text>
+          <View style={styles.modeChips}>
+            {TUTOR_MODES.map((mode) => {
+              const active = tutorMode === mode.id;
+              return (
+                <Pressable
+                  key={mode.id}
+                  onPress={() => selectMode(mode.id)}
+                  style={[styles.modeChip, active && styles.modeChipActive]}
+                >
+                  <Text
+                    style={[
+                      styles.modeChipText,
+                      active && styles.modeChipTextActive,
+                    ]}
+                  >
+                    {mode.icon} {mode.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.modeBlurb}>{activeMode.blurb}</Text>
+
+          <Pressable
+            onPress={toggleGuideWithoutAnswer}
+            style={[
+              styles.guideToggle,
+              guideWithoutAnswer && styles.guideToggleOn,
+            ]}
+          >
+            <Text
+              style={[
+                styles.guideToggleTitle,
+                guideWithoutAnswer && styles.guideToggleTitleOn,
+              ]}
+            >
+              🚫 Don’t give me the answer
+            </Text>
+            <Text style={styles.guideToggleSub}>
+              {guideWithoutAnswer
+                ? 'On — I’ll guide you with questions instead of solving it for you.'
+                : 'Off — turn on to learn by thinking, not copying answers.'}
+            </Text>
+          </Pressable>
 
           <View style={styles.toolbar}>
             <PrimaryButton
@@ -475,7 +567,7 @@ export function AITutorScreen({ route }: Props) {
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder="Ask a study question..."
+            placeholder={activeMode.placeholder}
             placeholderTextColor={colors.muted}
             style={styles.input}
             multiline
@@ -709,6 +801,62 @@ const styles = StyleSheet.create({
   headerRow: { marginBottom: 4 },
   h1: { fontSize: 30, fontWeight: '800', color: colors.ink },
   sub: { color: colors.muted, marginTop: 6, marginBottom: 18, lineHeight: 20 },
+  modeHeading: {
+    color: colors.ink,
+    fontWeight: '800',
+    fontSize: 15,
+    marginBottom: 8,
+  },
+  modeChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 8,
+  },
+  modeChip: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#fff',
+    borderRadius: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  modeChipActive: {
+    backgroundColor: colors.primarySoft,
+    borderColor: colors.primary,
+  },
+  modeChipText: { color: colors.muted, fontWeight: '600', fontSize: 13 },
+  modeChipTextActive: { color: colors.primary },
+  modeBlurb: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  guideToggle: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  guideToggleOn: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  guideToggleTitle: {
+    color: colors.ink,
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  guideToggleTitleOn: { color: colors.primary },
+  guideToggleSub: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+  },
   subEmpty: { color: colors.muted, lineHeight: 20, marginBottom: 0 },
   toolbar: { flexDirection: 'row', gap: 10, marginBottom: 12 },
   toolbarBtn: { flex: 1 },

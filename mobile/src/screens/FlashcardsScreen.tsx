@@ -128,7 +128,7 @@ export function FlashcardsScreen() {
               }
             />
             <PrimaryButton
-              label="Ask AI Tutor"
+              label="✨ AI Tutor"
               variant="secondary"
               onPress={() =>
                 navigation.navigate('AITutor', { subject: liveSelected.name })

@@ -280,7 +280,7 @@ export function DashboardScreen() {
             <Text style={styles.sub}>What would you like to study today?</Text>
           </View>
           <PrimaryButton
-            label="Ask AI Tutor"
+            label="✨ AI Tutor"
             onPress={() => navigation.navigate('AITutor', {})}
             style={{ marginTop: 8 }}
           />
@@ -377,7 +377,7 @@ export function DashboardScreen() {
             {
               icon: '✨',
               title: 'AI Tutor',
-              desc: 'Ask questions and get step-by-step help.',
+              desc: 'Pick a help mode — explain, hint, quiz, or learn without the answer.',
               onPress: () => navigation.navigate('AITutor', {}),
               showBulb: false,
               highlight: null as NearingUrgency | null,

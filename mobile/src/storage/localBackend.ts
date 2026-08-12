@@ -27,6 +27,7 @@ import type { SourceKind } from './sourceMime';
 import { labelForSource } from './sourceMime';
 import { loadLocalDb, updateLocalDb } from './store';
 import { generateFlashcardsViaGeminiPipeline } from './studyPipeline';
+import type { TutorMode } from './tutorModes';
 
 const MAX_TUTOR_CHATS = 40;
 
@@ -354,6 +355,10 @@ export const localBackend = {
     message: string,
     subject?: string,
     history?: { role: 'user' | 'assistant'; text: string }[],
+    options?: {
+      mode?: TutorMode;
+      guideWithoutAnswer?: boolean;
+    },
   ): Promise<TutorReply> {
     const { answerTutorQuestion } = await import('./tutorEngine');
     const db = await loadLocalDb();
@@ -363,6 +368,8 @@ export const localBackend = {
       history,
       subjects: db.subjects,
       flashcardsBySubject: db.flashcards,
+      mode: options?.mode,
+      guideWithoutAnswer: options?.guideWithoutAnswer,
     });
   },
 

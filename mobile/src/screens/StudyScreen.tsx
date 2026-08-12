@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   PanResponder,
   Pressable,
   ScrollView,
@@ -12,7 +14,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { api } from '../api/client';
 import type { Flashcard } from '../api/types';
-import { Card, PrimaryButton } from '../components/ui';
+import { PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import type { RootStackParamList } from '../navigation/types';
 import { explanationToBullets, isExampleBullet, normalizeKeyPointTitle } from '../storage/explanationFormat';
@@ -21,6 +23,177 @@ import { colors } from '../theme/colors';
 type Props = NativeStackScreenProps<RootStackParamList, 'Study'>;
 
 const SWIPE_THRESHOLD = 56;
+const FLIP_SPRING = { friction: 8, tension: 58, useNativeDriver: true as const };
+const PAGE_MS = 440;
+
+type PageTurn = {
+  card: Flashcard;
+  direction: 'next' | 'prev';
+};
+
+function FrontFaceContent({
+  keyConcept,
+  onReveal,
+}: {
+  keyConcept: string;
+  onReveal?: () => void;
+}) {
+  return (
+    <Pressable
+      style={styles.frontPress}
+      onPress={onReveal}
+      disabled={!onReveal}
+      accessibilityRole="button"
+      accessibilityLabel="Reveal explanation"
+    >
+      <Text style={styles.prompt}>{keyConcept}</Text>
+      <Text style={styles.tapCue}>Tap to reveal explanation</Text>
+    </Pressable>
+  );
+}
+
+function BackFaceContent({
+  answer,
+  onReveal,
+}: {
+  answer: string;
+  onReveal?: () => void;
+}) {
+  const explanationBullets = explanationToBullets(answer || '');
+  return (
+    <ScrollView
+      style={styles.bodyScroll}
+      contentContainerStyle={styles.bodyContent}
+      showsVerticalScrollIndicator
+      keyboardShouldPersistTaps="handled"
+    >
+      <Pressable onPress={onReveal} disabled={!onReveal}>
+        {explanationBullets.length ? (
+          <View style={styles.bulletList}>
+            {explanationBullets.map((line, i) => {
+              const example = isExampleBullet(line);
+              return (
+                <View
+                  key={`${i}-${line.slice(0, 24)}`}
+                  style={[styles.bulletRow, example ? styles.exampleRow : null]}
+                >
+                  <Text style={[styles.bulletMark, example ? styles.exampleMark : null]}>
+                    {example ? '✦' : '•'}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.prompt,
+                      styles.promptExplanation,
+                      example ? styles.exampleText : null,
+                    ]}
+                  >
+                    {line}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <Text style={[styles.prompt, styles.promptExplanation]}>
+            No explanation saved for this card.
+          </Text>
+        )}
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+function FlipCard({
+  card,
+  flipAnim,
+  flipped,
+  onToggle,
+}: {
+  card: Flashcard;
+  flipAnim: Animated.Value;
+  flipped: boolean;
+  onToggle: () => void;
+}) {
+  const keyConcept = normalizeKeyPointTitle(card.question || '', card.answer);
+
+  const frontRotate = flipAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '180deg'],
+  });
+  const backRotate = flipAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['180deg', '360deg'],
+  });
+  const frontOpacity = flipAnim.interpolate({
+    inputRange: [0, 0.5, 0.5, 1],
+    outputRange: [1, 1, 0, 0],
+  });
+  const backOpacity = flipAnim.interpolate({
+    inputRange: [0, 0.5, 0.5, 1],
+    outputRange: [0, 0, 1, 1],
+  });
+
+  return (
+    <View style={styles.flipScene}>
+      <Animated.View
+        pointerEvents={flipped ? 'none' : 'auto'}
+        style={[
+          styles.face,
+          styles.faceFront,
+          styles.faceLayer,
+          {
+            opacity: frontOpacity,
+            transform: [{ perspective: 1400 }, { rotateY: frontRotate }],
+          },
+        ]}
+      >
+        <Text style={styles.label}>Key concept</Text>
+        <FrontFaceContent keyConcept={keyConcept} onReveal={onToggle} />
+        <PrimaryButton
+          label="Show explanation"
+          variant="secondary"
+          onPress={onToggle}
+          style={{ marginTop: 12 }}
+        />
+      </Animated.View>
+
+      <Animated.View
+        pointerEvents={flipped ? 'auto' : 'none'}
+        style={[
+          styles.face,
+          styles.faceBack,
+          styles.faceLayer,
+          {
+            opacity: backOpacity,
+            transform: [{ perspective: 1400 }, { rotateY: backRotate }],
+          },
+        ]}
+      >
+        <Text style={styles.label}>Explanation</Text>
+        <BackFaceContent answer={card.answer || ''} onReveal={onToggle} />
+        <PrimaryButton
+          label="Show key concept"
+          variant="secondary"
+          onPress={onToggle}
+          style={{ marginTop: 12 }}
+        />
+      </Animated.View>
+    </View>
+  );
+}
+
+function StaticPageCard({ card }: { card: Flashcard }) {
+  const keyConcept = normalizeKeyPointTitle(card.question || '', card.answer);
+  return (
+    <View style={[styles.face, styles.faceFront, styles.staticPage]}>
+      <Text style={styles.label}>Key concept</Text>
+      <FrontFaceContent keyConcept={keyConcept} />
+      <View style={styles.ghostBtn}>
+        <Text style={styles.ghostBtnText}>Show explanation</Text>
+      </View>
+    </View>
+  );
+}
 
 export function StudyScreen({ route, navigation }: Props) {
   const { subjectId } = route.params;
@@ -31,14 +204,18 @@ export function StudyScreen({ route, navigation }: Props) {
   const [flipped, setFlipped] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pageTurn, setPageTurn] = useState<PageTurn | null>(null);
+  const [cardWidth, setCardWidth] = useState(0);
 
   const indexRef = useRef(0);
   const cardsRef = useRef<Flashcard[]>([]);
   const markingRef = useRef<Set<number>>(new Set());
-  const flippedRef = useRef(false);
+  const navLockRef = useRef(false);
+  const flipAnim = useRef(new Animated.Value(0)).current;
+  const pageAnim = useRef(new Animated.Value(0)).current;
+
   indexRef.current = index;
   cardsRef.current = cards;
-  flippedRef.current = flipped;
 
   useEffect(() => {
     let alive = true;
@@ -49,6 +226,10 @@ export function StudyScreen({ route, navigation }: Props) {
           setCards(data);
           setIndex(0);
           setFlipped(false);
+          flipAnim.setValue(0);
+          setPageTurn(null);
+          pageAnim.setValue(0);
+          navLockRef.current = false;
           setError(null);
         }
       } catch {
@@ -63,7 +244,7 @@ export function StudyScreen({ route, navigation }: Props) {
     return () => {
       alive = false;
     };
-  }, [subjectId]);
+  }, [subjectId, flipAnim, pageAnim]);
 
   const markCardMastered = useCallback(
     async (cardId: number) => {
@@ -92,26 +273,56 @@ export function StudyScreen({ route, navigation }: Props) {
   );
 
   const revealExplanation = useCallback(() => {
+    if (navLockRef.current) return;
     setFlipped((wasFlipped) => {
       const next = !wasFlipped;
+      Animated.spring(flipAnim, { ...FLIP_SPRING, toValue: next ? 1 : 0 }).start();
       if (!wasFlipped && next) {
         const cardId = cardsRef.current[indexRef.current]?.id;
         if (cardId != null) void markCardMastered(cardId);
       }
       return next;
     });
-  }, [markCardMastered]);
+  }, [flipAnim, markCardMastered]);
+
+  const runPageTurn = useCallback(
+    (nextIndex: number, direction: 'next' | 'prev') => {
+      if (navLockRef.current) return;
+      const leaving = cardsRef.current[indexRef.current];
+      if (!leaving) return;
+
+      navLockRef.current = true;
+      setFlipped(false);
+      flipAnim.setValue(0);
+      setPageTurn({ card: leaving, direction });
+      pageAnim.setValue(0);
+      setIndex(nextIndex);
+
+      Animated.timing(pageAnim, {
+        toValue: 1,
+        duration: PAGE_MS,
+        easing: Easing.bezier(0.22, 0.61, 0.36, 1),
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) setPageTurn(null);
+        pageAnim.setValue(0);
+        navLockRef.current = false;
+      });
+    },
+    [flipAnim, pageAnim],
+  );
 
   const goPrevious = useCallback(() => {
+    if (navLockRef.current) return;
     if (indexRef.current <= 0) {
       showToast('This is the first card');
       return;
     }
-    setFlipped(false);
-    setIndex((i) => Math.max(0, i - 1));
-  }, [showToast]);
+    runPageTurn(indexRef.current - 1, 'prev');
+  }, [runPageTurn, showToast]);
 
   const goNext = useCallback(() => {
+    if (navLockRef.current) return;
     const current = cardsRef.current[indexRef.current];
     if (current && !current.mastered) {
       void markCardMastered(current.id);
@@ -121,15 +332,16 @@ export function StudyScreen({ route, navigation }: Props) {
       showToast('Deck finished — progress saved');
       return;
     }
-    setFlipped(false);
-    setIndex((i) => Math.min(cardsRef.current.length - 1, i + 1));
-  }, [markCardMastered, showToast]);
+    runPageTurn(indexRef.current + 1, 'next');
+  }, [markCardMastered, runPageTurn, showToast]);
 
   const panResponder = useMemo(
     () =>
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gesture) =>
-          Math.abs(gesture.dx) > 12 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
+          !navLockRef.current &&
+          Math.abs(gesture.dx) > 12 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
         onPanResponderRelease: (_, gesture) => {
           if (gesture.dx <= -SWIPE_THRESHOLD) {
             goNext();
@@ -142,6 +354,26 @@ export function StudyScreen({ route, navigation }: Props) {
       }),
     [goNext, goPrevious],
   );
+
+  const pivot = Math.max(cardWidth, 1) / 2;
+  const isNextTurn = pageTurn?.direction !== 'prev';
+
+  const turningRotate = pageAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: isNextTurn ? ['0deg', '-105deg'] : ['0deg', '105deg'],
+  });
+  const turningOpacity = pageAnim.interpolate({
+    inputRange: [0, 0.72, 1],
+    outputRange: [1, 0.55, 0],
+  });
+  const incomingScale = pageAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.94, 1],
+  });
+  const incomingOpacity = pageAnim.interpolate({
+    inputRange: [0, 0.25, 1],
+    outputRange: [0.65, 0.9, 1],
+  });
 
   if (loading) {
     return (
@@ -177,12 +409,10 @@ export function StudyScreen({ route, navigation }: Props) {
   }
 
   const card = cards[index];
-  const explanationBullets = explanationToBullets(card.answer || '');
-  const keyConcept = normalizeKeyPointTitle(card.question || '', card.answer);
   const atStart = index <= 0;
   const atEnd = index >= cards.length - 1;
   const masteredCount = cards.filter((c) => c.mastered).length;
-  const progressPct = cards.length
+  const progressPercent = cards.length
     ? Math.round((masteredCount / cards.length) * 100)
     : 0;
 
@@ -190,80 +420,53 @@ export function StudyScreen({ route, navigation }: Props) {
     <View style={styles.root}>
       <Text style={styles.eyebrow}>
         {subject?.icon} {subject?.name ?? 'Study'} · {index + 1}/{cards.length}
-        {` · ${progressPct}% mastered`}
+        {` · ${progressPercent}% mastered`}
       </Text>
 
-      <View style={{ flex: 1 }} {...panResponder.panHandlers}>
-        <Card style={[styles.card, flipped ? styles.cardFlipped : undefined]}>
-          <Text style={styles.label}>{flipped ? 'Explanation' : 'Key concept'}</Text>
-
-          {flipped ? (
-            <ScrollView
-              style={styles.bodyScroll}
-              contentContainerStyle={styles.bodyContent}
-              showsVerticalScrollIndicator
-              keyboardShouldPersistTaps="handled"
-            >
-              <Pressable onPress={revealExplanation}>
-                {explanationBullets.length ? (
-                  <View style={styles.bulletList}>
-                    {explanationBullets.map((line, i) => {
-                      const example = isExampleBullet(line);
-                      return (
-                        <View
-                          key={`${i}-${line.slice(0, 24)}`}
-                          style={[
-                            styles.bulletRow,
-                            example ? styles.exampleRow : null,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.bulletMark,
-                              example ? styles.exampleMark : null,
-                            ]}
-                          >
-                            {example ? '✦' : '•'}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.prompt,
-                              styles.promptExplanation,
-                              example ? styles.exampleText : null,
-                            ]}
-                          >
-                            {line}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                ) : (
-                  <Text style={[styles.prompt, styles.promptExplanation]}>
-                    No explanation saved for this card.
-                  </Text>
-                )}
-              </Pressable>
-            </ScrollView>
-          ) : (
-            <Pressable
-              style={styles.frontPress}
-              onPress={revealExplanation}
-              accessibilityRole="button"
-              accessibilityLabel="Reveal explanation"
-            >
-              <Text style={styles.prompt}>{keyConcept}</Text>
-              <Text style={styles.tapCue}>Tap to reveal explanation</Text>
-            </Pressable>
-          )}
-
-          <PrimaryButton
-            label={flipped ? 'Show key concept' : 'Show explanation'}
-            variant="secondary"
-            onPress={revealExplanation}
-            style={{ marginTop: 12 }}
+      <View
+        style={styles.stage}
+        onLayout={(e) => setCardWidth(e.nativeEvent.layout.width)}
+        {...panResponder.panHandlers}
+      >
+        <Animated.View
+          style={[
+            styles.cardShell,
+            pageTurn
+              ? {
+                  opacity: incomingOpacity,
+                  transform: [{ scale: incomingScale }],
+                }
+              : undefined,
+          ]}
+        >
+          <FlipCard
+            card={card}
+            flipAnim={flipAnim}
+            flipped={flipped}
+            onToggle={revealExplanation}
           />
-        </Card>
+        </Animated.View>
+
+        {pageTurn ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.cardShell,
+              styles.pageOverlay,
+              {
+                opacity: turningOpacity,
+                transform: [
+                  { perspective: 1600 },
+                  { translateX: isNextTurn ? -pivot : pivot },
+                  { rotateY: turningRotate },
+                  { translateX: isNextTurn ? pivot : -pivot },
+                ],
+              },
+            ]}
+          >
+            <StaticPageCard card={pageTurn.card} />
+          </Animated.View>
+        ) : null}
       </View>
 
       <View style={styles.row}>
@@ -293,13 +496,66 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   eyebrow: { color: colors.muted, fontWeight: '700', marginBottom: 14 },
-  card: {
+  stage: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'stretch',
+    position: 'relative',
+  },
+  cardShell: {
+    flex: 1,
+  },
+  pageOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 2,
+  },
+  flipScene: {
+    flex: 1,
+  },
+  face: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.line,
+    padding: 20,
+    shadowColor: '#251f4d',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+    overflow: 'hidden',
+    backfaceVisibility: 'hidden',
+  },
+  faceFront: {
     backgroundColor: '#fff',
   },
-  cardFlipped: { backgroundColor: colors.purpleTint },
+  faceBack: {
+    backgroundColor: colors.purpleTint,
+  },
+  faceLayer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  staticPage: {
+    flex: 1,
+  },
+  ghostBtn: {
+    marginTop: 12,
+    backgroundColor: colors.primarySoft,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  ghostBtnText: {
+    color: colors.primary,
+    fontWeight: '750' as unknown as '700',
+    fontSize: 15,
+  },
   label: {
     color: colors.primary,
     fontWeight: '800',

@@ -68,7 +68,7 @@ jobs:
             echo "platform=${{ github.event.inputs.platform }}" >> "$GITHUB_OUTPUT"
             echo "profile=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
           else
-            echo "platform=all" >> "$GITHUB_OUTPUT"
+            echo "platform=android" >> "$GITHUB_OUTPUT"
             echo "profile=preview" >> "$GITHUB_OUTPUT"
           fi
         working-directory: .

@@ -98,28 +98,38 @@ Local banners only work while the app process is alive. **Force-killed / swiped-
 1. **Firebase → Android app**
    - Firebase Console → Project settings → Add app → Android
    - Package name: `com.studybuddy.ai`
-   - Copy the Android App ID (`1:…:android:…`) into `EXPO_PUBLIC_FIREBASE_ANDROID_APP_ID` (local `.env` and EAS preview/production env)
+   - Repo already includes `mobile/google-services.json` for this package
 2. **google-services.json**
-   - The repo includes `mobile/google-services.json` (Firebase Android app for `com.studybuddy.ai`)
-   - `app.config.js` points `android.googleServicesFile` at that file
-   - If you re-download from Firebase, replace `mobile/google-services.json` (package must stay `com.studybuddy.ai`)
+   - Committed at `mobile/google-services.json` and referenced by `android.googleServicesFile`
+   - If you re-download from Firebase, replace that file (package must stay `com.studybuddy.ai`)
 3. **EAS FCM V1 credentials (Android)**
-   - Firebase Console → Project settings → Service accounts → Generate new private key
-   - `eas credentials` → Android → FCM V1 service account key → upload that JSON
-   - Or upload under [expo.dev credentials](https://expo.dev) for project `studybuddyw`
-   - This is a **private key** — never commit it to the repo (unlike `google-services.json`)
+   - Firebase Console → Project settings → Service accounts → **Generate new private key**
+   - Upload that JSON in EAS: Android → **FCM V1 service account key**
+   - In [Google Cloud IAM](https://console.cloud.google.com/iam-admin/iam) for the same project, the service account needs role **Firebase Cloud Messaging API Admin**
+   - In Google Cloud → **APIs & Services**, enable **Firebase Cloud Messaging API**
+   - Never commit the private-key JSON to GitHub
 4. **EAS APNs key (iOS)**
    - Create an Apple Push Notifications key and upload it in EAS iOS credentials
-5. Install a **preview / production / development** build — Expo Go cannot reliably deliver killed-app chat pushes
+5. Install a **new** preview/production APK from the latest GitHub Release / EAS build — Expo Go cannot deliver killed-app chat pushes
+6. Open StudyBuddy **once** while signed in (registers the Expo push token), then force-close and test
 
-Notes:
+#### Still not getting closed-app alerts?
 
-- Local banners require the recipient app to be running (foreground or background). Fully force-killed apps still need remote Expo push
-- Remote push requires a **development / preview / production** build (not reliable in Expo Go)
-- Republish `firestore.rules` so `expoPushTokens` updates are allowed
-- Android uses the `chat-messages` notification channel (created at app boot)
-- Notification `data` values sent to Expo must be strings (booleans can break Android FCM delivery)
-- The Friends control on Messages is a dropdown next to **New group** (not inside the conversation list)
+1. Confirm both phones use the **latest APK** built after `google-services.json` + FCM V1 were added
+2. On the **recipient**, Firebase Console → Firestore → `chatUsers/{uid}` → `expoPushTokens` should be a non-empty list (`ExponentPushToken[...]`)
+3. Send a chat from another account with the recipient force-closed — the **sender** now shows a toast if Expo reports `InvalidCredentials`, missing token, etc.
+4. Manually test Expo delivery with the recipient token:
+
+```bash
+curl -H "Content-Type: application/json" -X POST "https://exp.host/--/api/v2/push/send" -d '{
+  "to": "ExponentPushToken[PASTE_TOKEN]",
+  "title": "Test",
+  "body": "Closed-app push check",
+  "priority": "high"
+}'
+```
+
+Then fetch the receipt id from the response via `https://exp.host/--/api/v2/push/getReceipts`. `InvalidCredentials` means the FCM V1 key on EAS is wrong/incomplete; `ok` means Expo handed off to FCM and the device/OS is the next place to check.
 
 ### Google Drive sync (chat backup)
 

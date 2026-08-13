@@ -311,42 +311,57 @@ export async function clearChatSession(): Promise<void> {
 }
 
 /** Persist this device's Expo push token on the signed-in chat profile. */
-export async function registerChatPushForCurrentUser(): Promise<void> {
-  if (!isChatApiConfigured()) return;
+export async function registerChatPushForCurrentUser(): Promise<boolean> {
+  if (!isChatApiConfigured()) return false;
   try {
     const uid = await requireUid();
+    const auth = getFirebaseAuth();
     const { registerChatPushToken, ensureChatNotificationHandler } =
       await import('./chatNotifications');
     ensureChatNotificationHandler();
     const token = await registerChatPushToken();
-    if (!token) return;
+    if (!token) return false;
 
     const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
     const snap = await getDoc(userRef);
-    const existing = snap.exists()
-      ? ((snap.data() as UserDoc).expoPushTokens || [])
-      : [];
+    const existingDoc = snap.exists() ? (snap.data() as UserDoc) : null;
+    const existing = existingDoc?.expoPushTokens || [];
     const next = Array.from(new Set([token, ...existing])).slice(
       0,
       MAX_PUSH_TOKENS,
     );
+    const email =
+      existingDoc?.email ||
+      auth.currentUser?.email ||
+      '';
+    const name =
+      existingDoc?.name ||
+      auth.currentUser?.displayName ||
+      email ||
+      'Student';
+
     if (
       next.length === existing.length &&
       next.every((t, i) => t === existing[i])
     ) {
-      return;
+      return true;
     }
-    // set+merge so token writes still work if the profile doc is partial/missing.
+    // Include email/name so Firestore rules that require those fields still pass
+    // even if the profile doc was partial.
     await setDoc(
       userRef,
       {
+        email: String(email || 'unknown@studybuddy.local'),
+        name: String(name || 'Student'),
         expoPushTokens: next,
         updatedAt: serverTimestamp(),
       },
       { merge: true },
     );
+    return true;
   } catch {
     // Push is best-effort — chat still works without it.
+    return false;
   }
 }
 
@@ -1126,8 +1141,8 @@ export async function sendMessage(
     await batch.commit();
 
     // Push notify other members (best-effort; never fail the send).
-    // Await briefly so the Expo fan-out starts before the JS runtime can be
-    // suspended if the sender backgrounds the app right after sending.
+    // Wait long enough for Expo tickets + receipts so closed-app delivery
+    // errors (InvalidCredentials, empty tokens) can surface to the sender.
     try {
       await Promise.race([
         notifyConversationMembers({
@@ -1137,7 +1152,7 @@ export async function sendMessage(
           body,
           unreadBeforeByMember,
         }),
-        new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+        new Promise<void>((resolve) => setTimeout(resolve, 4500)),
       ]);
     } catch {
       // ignore push failures
@@ -1166,7 +1181,10 @@ async function notifyConversationMembers(input: {
     const {
       chatNotificationTitle,
       sendChatPushNotifications,
+      consumeLastPushDeliveryError,
     } = await import('./chatNotifications');
+    // Clear any stale registration error before fan-out.
+    consumeLastPushDeliveryError();
 
     const isGroup = input.conv.type === 'group';
     const senderName =
@@ -1189,7 +1207,6 @@ async function notifyConversationMembers(input: {
         const snap = await getDoc(doc(db, 'chatUsers', memberId));
         if (!snap.exists()) continue;
         const memberTokens = (snap.data() as UserDoc).expoPushTokens || [];
-        if (memberTokens.length === 0) continue;
         const unreadBefore = Number(
           input.unreadBeforeByMember[memberId] || 0,
         );

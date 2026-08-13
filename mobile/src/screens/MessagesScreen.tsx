@@ -138,16 +138,16 @@ export function MessagesScreen({ navigation }: Props) {
 
           setPushInfo(info);
 
-          if (info.expoToken) {
+          if (info.fcmToken) {
             const saved = await registerChatPushForCurrentUser(
-              info.expoToken,
+              info.fcmToken,
             );
 
             if (!cancelled && !saved) {
               setPushInfo({
                 ...info,
                 error:
-                  'Push token is ready, but it could not be saved to Firestore.',
+                  'FCM token is ready, but it could not be saved to Firestore.',
               });
             }
           }
@@ -297,9 +297,9 @@ export function MessagesScreen({ navigation }: Props) {
     setPushInfo((prev) => ({
       permission: prev?.permission ?? 'unknown',
       hasNativeToken: prev?.hasNativeToken ?? false,
-      expoToken: prev?.expoToken ?? null,
+      fcmToken: prev?.fcmToken ?? null,
       isExpoGo: prev?.isExpoGo ?? false,
-      error: 'Running push diagnostic (permissions → FCM → exp.host → Expo)…',
+      error: 'Running push diagnostic (permissions → FCM)…',
     }));
 
     try {
@@ -308,30 +308,24 @@ export function MessagesScreen({ navigation }: Props) {
 
       const fcmOk =
         (diagnostic.fcm as { success?: boolean } | undefined)?.success === true;
-      const expoOk =
-        (diagnostic.expo as { success?: boolean } | undefined)?.success ===
-        true;
 
       setPushInfo((prev) => ({
         permission: prev?.permission ?? 'unknown',
         hasNativeToken: fcmOk,
-        expoToken: prev?.expoToken ?? null,
+        fcmToken: prev?.fcmToken ?? null,
         isExpoGo: prev?.isExpoGo ?? false,
         error: summary,
       }));
 
       Alert.alert('Push Diagnostic', JSON.stringify(diagnostic, null, 2));
 
-      if (!fcmOk || !expoOk) {
+      if (!fcmOk) {
         showToast(
-          !fcmOk
-            ? 'FCM device token failed — see Push Diagnostic alert for the real error.'
-            : 'Expo push token failed — see Push Diagnostic alert for the real error.',
+          'FCM device token failed — see Push Diagnostic alert for the real error.',
         );
         return;
       }
 
-      // Tokens look healthy — continue with the existing self-test send path.
       const info = await diagnoseChatPush();
 
       setPushInfo({
@@ -339,7 +333,7 @@ export function MessagesScreen({ navigation }: Props) {
         error: info.error || summary,
       });
 
-      if (info.error || !info.expoToken) {
+      if (info.error || !info.fcmToken) {
         showToast(
           info.error || 'Push is not ready on this install.',
         );
@@ -347,23 +341,23 @@ export function MessagesScreen({ navigation }: Props) {
       }
 
       const saved = await registerChatPushForCurrentUser(
-        info.expoToken,
+        info.fcmToken,
       );
 
       if (!saved) {
         showToast(
-          'Push token is ready, but Firestore could not save it. Check sign-in / Firestore rules.',
+          'FCM token is ready, but Firestore could not save it. Check sign-in / Firestore rules.',
         );
         return;
       }
 
       setPushInfo({
         ...info,
-        error: 'Sending Expo→FCM test notification…',
+        error: 'Saving FCM token and verifying local notification…',
       });
 
       const result = await sendSelfTestChatPush(
-        info.expoToken,
+        info.fcmToken,
       );
 
       if (result.deliveryError) {
@@ -380,17 +374,17 @@ export function MessagesScreen({ navigation }: Props) {
         });
 
         showToast(
-          'Push test sent successfully. Now swipe StudyBuddy away — do not Force stop it — then send a message from another account.',
+          'FCM token saved. Force-close StudyBuddy — do not Force stop it — then send a message from another account.',
         );
       } else {
         setPushInfo({
           ...info,
           error:
-            'Expo did not accept the push notification. Check FCM credentials on EAS.',
+            'Could not verify FCM registration on this device.',
         });
 
         showToast(
-          'Push test was not accepted by Expo. Check FCM credentials on EAS.',
+          'Could not verify FCM registration on this device.',
         );
       }
     } catch (e) {
@@ -400,7 +394,7 @@ export function MessagesScreen({ navigation }: Props) {
       setPushInfo((prev) => ({
         permission: prev?.permission ?? 'unknown',
         hasNativeToken: prev?.hasNativeToken ?? false,
-        expoToken: prev?.expoToken ?? null,
+        fcmToken: prev?.fcmToken ?? null,
         isExpoGo: prev?.isExpoGo ?? false,
         error: message,
       }));
@@ -543,9 +537,9 @@ export function MessagesScreen({ navigation }: Props) {
               ? 'Expo Go cannot receive killed-app chat alerts. Install StudyBuddy APK v1.0.2+.'
               : pushInfo?.error
                 ? pushInfo.error
-                : pushInfo?.expoToken
-                  ? `Ready · token …${pushInfo.expoToken.slice(-12)}`
-                  : 'Checking Expo push registration…'}
+                : pushInfo?.fcmToken
+                  ? `Ready · FCM …${pushInfo.fcmToken.slice(-12)}`
+                  : 'Checking FCM registration…'}
           </Text>
           <PrimaryButton
             label={pushTesting ? 'Diagnosing…' : 'Test push on this phone'}

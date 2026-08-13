@@ -302,8 +302,8 @@ export async function clearChatSession(): Promise<void> {
     const uid = auth.currentUser?.uid;
     if (uid) {
       try {
-        const { getCurrentChatPushToken } = await import('./chatNotifications');
-        const token = await getCurrentChatPushToken();
+        const { getCurrentNativeFcmToken } = await import('./chatNotifications');
+        const token = await getCurrentNativeFcmToken();
         if (token) await unregisterChatPushToken(token);
       } catch {
         // ignore push cleanup failures on sign-out
@@ -402,7 +402,7 @@ export async function registerChatPushForCurrentUser(
   }
 }
 
-/** Remove a device token from the current chat profile (e.g. on sign-out). */
+/** Remove a device FCM token from the current chat profile (e.g. on sign-out). */
 export async function unregisterChatPushToken(token: string): Promise<void> {
   const value = token.trim();
   if (!value || !isChatApiConfigured()) return;
@@ -411,13 +411,13 @@ export async function unregisterChatPushToken(token: string): Promise<void> {
     const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
     const snap = await getDoc(userRef);
     if (!snap.exists()) return;
-    const existing = (snap.data() as UserDoc).expoPushTokens || [];
+    const existing = (snap.data() as UserDoc).fcmTokens || [];
     const next = existing.filter((t) => t !== value);
     if (next.length === existing.length) return;
     await setDoc(
       userRef,
       {
-        expoPushTokens: next,
+        fcmTokens: next,
         updatedAt: serverTimestamp(),
       },
       { merge: true },

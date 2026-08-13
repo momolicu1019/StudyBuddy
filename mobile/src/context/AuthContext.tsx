@@ -24,6 +24,7 @@ import {
   type AuthUser,
   type CloudActionResult,
 } from '../storage/cloud';
+import { clearChatSession } from '../api/chatApi';
 import {
   GOOGLE_DRIVE_APPDATA_SCOPE,
   syncDownFromGoogleDrive,
@@ -211,6 +212,7 @@ function useAuthSession() {
 
   const signOut = useCallback(async () => {
     await signOutNativeGoogle();
+    await clearChatSession();
     await clearAuthState();
     await setActiveStorageScope(GUEST_STORAGE_SCOPE);
     await persist({ session: null, skippedLogin: false });

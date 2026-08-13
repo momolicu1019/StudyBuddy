@@ -19,8 +19,29 @@ This FastAPI project is the **optional cloud** layer for later:
 | Account | Sign-in / profile |
 | Sync | Keep devices consistent |
 | Devices | Multi-device management |
+| **Chat** | Student 1:1 DMs (`/api/chat/*`) on Neon Postgres |
 
-You do **not** need to run this server for normal app use. Keep it for experiments, future sync, or API prototyping.
+You do **not** need to run this server for normal study features. **Student chat** does require this API + a Postgres database (Neon works well).
+
+### Student chat (REST MVP)
+
+1. Copy `.env.example` → `.env` and set:
+
+```bash
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require
+CHAT_JWT_SECRET=a-long-random-secret
+```
+
+2. Install deps and run the API (tables are created automatically on startup):
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+3. Point the mobile app at the API with `EXPO_PUBLIC_CHAT_API_URL` (see `mobile/.env.example`).
+
+Chat endpoints: `POST /api/chat/auth/upsert`, `POST /api/chat/dms`, `GET /api/chat/conversations`, `GET|POST /api/chat/conversations/{id}/messages`.
 
 ## Run locally (optional)
 

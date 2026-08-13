@@ -36,6 +36,7 @@ On-device code lives in `mobile/src/storage/`. Sign in is optional via the login
 - Flashcard study mode
 - Quiz mode with scoring
 - AI Tutor chat (on-device helpers)
+- **Student Messages** — 1:1 DMs via optional FastAPI + Neon Postgres (chat icon next to profile)
 - Pomodoro focus timer
 - Study progress stats
 

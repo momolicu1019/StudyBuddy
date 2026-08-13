@@ -70,7 +70,9 @@ Starting a DM previously called `getDoc` on a conversation that did not exist ye
 - Each friend must have opened **Messages** at least once (same as DMs)
 - Groups are stored as `chatConversations` docs with `type: "group"` (auto-generated ids)
 - Open a group and tap the pencil in the header to **rename** it — any member can update the name
-- Republish `firestore.rules` after pulling this update — older rules only allow 2-member DMs
+- Open a group and tap the **person-add** icon to **invite more members** by email (membership only grows; max 20)
+- The inbox and group thread header show the current **member count**
+- Republish `firestore.rules` after pulling this update — older rules only allow 2-member DMs / title-only group edits
 
 ### Push notifications (new messages)
 
@@ -90,6 +92,9 @@ Notes:
 - Push requires a **development / preview / production** build (not reliable in Expo Go for all devices)
 - Republish `firestore.rules` so `expoPushTokens` updates are allowed
 - Android uses the `chat-messages` notification channel
+- Android also needs **FCM V1 credentials** configured in EAS (`eas credentials`) for remote delivery
+- iOS needs an **APNs key** uploaded to the Expo project for remote delivery
+- Notification `data` values sent to Expo must be strings (booleans can break Android FCM delivery)
 
 ### Google Drive sync (chat backup)
 

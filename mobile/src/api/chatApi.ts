@@ -329,12 +329,43 @@ export async function registerChatPushForCurrentUser(): Promise<void> {
     ) {
       return;
     }
-    await updateDoc(userRef, {
-      expoPushTokens: next,
-      updatedAt: serverTimestamp(),
-    });
+    // set+merge so token writes still work if the profile doc is partial/missing.
+    await setDoc(
+      userRef,
+      {
+        expoPushTokens: next,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
   } catch {
     // Push is best-effort — chat still works without it.
+  }
+}
+
+/** Drop invalid Expo tokens from a chat profile (best-effort). */
+async function pruneChatPushTokens(
+  memberId: string,
+  badTokens: string[],
+): Promise<void> {
+  const remove = new Set(
+    badTokens.map((t) => String(t || '').trim()).filter(Boolean),
+  );
+  if (remove.size === 0) return;
+  try {
+    const userRef = doc(getFirestoreDb(), 'chatUsers', memberId);
+    const snap = await getDoc(userRef);
+    if (!snap.exists()) return;
+    const existing = (snap.data() as UserDoc).expoPushTokens || [];
+    const next = existing.filter((t) => !remove.has(t));
+    if (next.length === existing.length) return;
+    await setDoc(
+      userRef,
+      { expoPushTokens: next, updatedAt: serverTimestamp() },
+      { merge: true },
+    );
+  } catch {
+    // ignore prune failures
   }
 }
 
@@ -350,10 +381,14 @@ export async function unregisterChatPushToken(token: string): Promise<void> {
     const existing = (snap.data() as UserDoc).expoPushTokens || [];
     const next = existing.filter((t) => t !== value);
     if (next.length === existing.length) return;
-    await updateDoc(userRef, {
-      expoPushTokens: next,
-      updatedAt: serverTimestamp(),
-    });
+    await setDoc(
+      userRef,
+      {
+        expoPushTokens: next,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
   } catch {
     // ignore
   }
@@ -758,6 +793,103 @@ export async function updateGroupTitle(
   }
 }
 
+/** Invite classmates into an existing group by Study Buddy email. */
+export async function addGroupMembers(
+  conversationId: string,
+  memberEmails: string[],
+): Promise<ChatConversation> {
+  try {
+    const uid = await requireUid();
+    const db = getFirestoreDb();
+    const convRef = doc(db, 'chatConversations', conversationId);
+    const convSnap = await getDoc(convRef);
+    if (!convSnap.exists()) throw new Error('Conversation not found');
+    const conv = convSnap.data() as ConversationDoc;
+    if (!(conv.memberIds || []).includes(uid)) {
+      throw new Error('Not a member of this conversation');
+    }
+    if (conv.type !== 'group') {
+      throw new Error('Only group chats can add members');
+    }
+
+    const meSnap = await getDoc(doc(db, 'chatUsers', uid));
+    if (!meSnap.exists()) {
+      throw new Error('Chat profile missing — reopen Messages');
+    }
+    const me = meSnap.data() as UserDoc;
+
+    const uniqueEmails = Array.from(
+      new Set(
+        (memberEmails || []).map(normalizeEmail).filter(Boolean),
+      ),
+    );
+    if (uniqueEmails.length < 1) {
+      throw new Error('Add at least one friend’s email');
+    }
+
+    const members: Record<string, { email: string; name: string }> = {
+      ...(conv.members || {}),
+    };
+    const unread: Record<string, number> = { ...(conv.unread || {}) };
+    const existingIds = new Set(conv.memberIds || []);
+    let added = 0;
+
+    for (const email of uniqueEmails) {
+      const peer = await resolvePeerByEmail(email, me.email);
+      if (existingIds.has(peer.uid) || members[peer.uid]) {
+        continue;
+      }
+      members[peer.uid] = { email: peer.email, name: peer.name };
+      unread[peer.uid] = unread[peer.uid] ?? 0;
+      existingIds.add(peer.uid);
+      added += 1;
+    }
+
+    if (added === 0) {
+      throw new Error('Those classmates are already in this group');
+    }
+
+    const memberIds = Array.from(existingIds).sort();
+    if (memberIds.length > MAX_GROUP_MEMBERS) {
+      throw new Error(`Groups can have at most ${MAX_GROUP_MEMBERS} members`);
+    }
+
+    // Keep members/unread maps aligned with memberIds only.
+    const nextMembers: Record<string, { email: string; name: string }> = {};
+    const nextUnread: Record<string, number> = {};
+    for (const id of memberIds) {
+      nextMembers[id] = members[id] || {
+        email: 'unknown',
+        name: 'Student',
+      };
+      nextUnread[id] = Number(unread[id] || 0);
+    }
+
+    await updateDoc(convRef, {
+      memberIds,
+      members: nextMembers,
+      unread: nextUnread,
+    });
+
+    const mapped = mapConversation(
+      {
+        id: conversationId,
+        data: () => ({
+          ...conv,
+          memberIds,
+          members: nextMembers,
+          unread: nextUnread,
+        }),
+      },
+      uid,
+    );
+    if (!mapped) throw new Error('Could not add members');
+    return mapped;
+  } catch (err) {
+    throw mapChatError(err, 'Could not add members');
+  }
+}
+
 export async function listMessages(
   conversationId: string,
   opts?: { afterId?: string; limit?: number },
@@ -922,7 +1054,7 @@ async function notifyConversationMembers(input: {
         const unreadBefore = Number(
           input.unreadBeforeByMember[memberId] || 0,
         );
-        await sendChatPushNotifications({
+        const result = await sendChatPushNotifications({
           tokens: memberTokens,
           title: chatNotificationTitle(fromLabel, unreadBefore),
           body: input.body,
@@ -934,6 +1066,9 @@ async function notifyConversationMembers(input: {
             isGroup,
           },
         });
+        if (result.badTokens.length > 0) {
+          void pruneChatPushTokens(memberId, result.badTokens);
+        }
       } catch {
         // skip members we cannot notify
       }

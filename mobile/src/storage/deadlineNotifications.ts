@@ -1,15 +1,17 @@
 /**
  * Local OS notifications for nearing deadlines (amber + red only).
  *
- * Green / far deadlines are never scheduled. Reminders fire four times a
- * day at 9:00, 12:00, 15:00, and 18:00 local on each amber or red calendar
- * day, with a one-time catch-up if every slot for today already passed
- * while the deadline is still nearing.
+ * Green / far deadlines are never scheduled. Reminders fire every 2 hours
+ * (local clock: :00 on even hours) on each amber or red calendar day, with a
+ * one-time catch-up if every slot for today already passed while the deadline
+ * is still nearing. Only the next few days of slots are queued so we stay under
+ * the OS pending-notification limit; opening the app reschedules further out.
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 
+import { ensureForegroundNotificationHandler } from './foregroundNotifications';
 import type { Deadline } from './schema';
 import {
   daysUntilDue,
@@ -22,32 +24,32 @@ import {
 } from './deadlineUtils';
 
 const CHANNEL_ID = 'deadline-reminders';
-/** Local reminder hours: 9am, 12nn, 3pm, 6pm. */
-const REMINDER_HOURS = [9, 12, 15, 18] as const;
+/** Remind every 2 hours on the local clock (00:00 … 22:00). */
+const REMINDER_INTERVAL_HOURS = 2;
+const REMINDER_HOURS = Array.from(
+  { length: 24 / REMINDER_INTERVAL_HOURS },
+  (_, i) => i * REMINDER_INTERVAL_HOURS,
+);
 const REMINDER_MINUTE = 0;
+/**
+ * Cap how far ahead we schedule DATE triggers. iOS allows ~64 pending
+ * notifications app-wide; 72h × every 2h ≈ 36 slots per deadline.
+ */
+const SCHEDULE_LOOKAHEAD_MS = 72 * 60 * 60 * 1000;
 /** Keep nudging overdue (red) items for a few days past due. */
 const OVERDUE_REMINDER_DAYS = 3;
 const CATCHUP_PREFIX = 'deadline.notif.catchup.';
 const DATA_TYPE = 'deadline';
 
-let handlerReady = false;
-let syncing: Promise<void> | null = null;
+/** Serialize syncs so cancel+reschedule never races across account switches. */
+let syncChain: Promise<void> = Promise.resolve();
 
 function canUseNotifications(): boolean {
   return Platform.OS === 'ios' || Platform.OS === 'android';
 }
 
 export function ensureDeadlineNotificationHandler(): void {
-  if (!canUseNotifications() || handlerReady) return;
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
-  });
-  handlerReady = true;
+  ensureForegroundNotificationHandler();
 }
 
 function reminderAt(day: Date, hour: number): Date {
@@ -122,7 +124,13 @@ async function ensurePermissionsAndChannel(): Promise<boolean> {
   const current = await Notifications.getPermissionsAsync();
   let status = current.status;
   if (status !== 'granted') {
-    const requested = await Notifications.requestPermissionsAsync();
+    const requested = await Notifications.requestPermissionsAsync({
+      ios: {
+        allowAlert: true,
+        allowBadge: true,
+        allowSound: true,
+      },
+    });
     status = requested.status;
   }
   return status === 'granted';
@@ -211,6 +219,7 @@ async function scheduleForDeadline(deadline: Deadline, now: Date): Promise<void>
   const amberStart = addDays(dueDay, -7);
   const rangeEnd = addDays(dueDay, OVERDUE_REMINDER_DAYS);
   const today = startOfLocalDay(now);
+  const scheduleUntil = now.getTime() + SCHEDULE_LOOKAHEAD_MS;
 
   for (
     let day = new Date(amberStart.getTime());
@@ -226,6 +235,7 @@ async function scheduleForDeadline(deadline: Deadline, now: Date): Promise<void>
     for (const hour of REMINDER_HOURS) {
       const fireAt = reminderAt(day, hour);
       if (fireAt.getTime() <= now.getTime()) continue;
+      if (fireAt.getTime() > scheduleUntil) continue;
 
       await scheduleDateNotification({
         identifier: `deadline-${deadline.id}-${dayIso}-${hourSlotLabel(hour)}`,
@@ -252,11 +262,8 @@ export async function syncDeadlineNotifications(
 ): Promise<void> {
   if (!canUseNotifications()) return;
 
-  if (syncing) {
-    await syncing;
-  }
-
-  syncing = (async () => {
+  const snapshot = deadlines.slice();
+  const run = async () => {
     try {
       const granted = await ensurePermissionsAndChannel();
       if (!granted) return;
@@ -264,18 +271,17 @@ export async function syncDeadlineNotifications(
       await cancelDeadlineNotifications();
 
       const now = new Date();
-      for (const deadline of deadlines) {
+      for (const deadline of snapshot) {
         if (deadline.completed) continue;
         await scheduleForDeadline(deadline, now);
       }
     } catch {
       // Notifications are best-effort; never block deadline CRUD.
-    } finally {
-      syncing = null;
     }
-  })();
+  };
 
-  await syncing;
+  syncChain = syncChain.then(run, run);
+  await syncChain;
 }
 
 /** Convenience: load is owned by caller; this just syncs a known list. */
@@ -291,9 +297,24 @@ export async function cancelAllDeadlineNotifications(): Promise<void> {
 export function isDeadlineNotificationResponse(
   data: unknown,
 ): data is { type: typeof DATA_TYPE; screen?: string } {
-  return Boolean(
-    data &&
-      typeof data === 'object' &&
-      (data as { type?: string }).type === DATA_TYPE,
-  );
+  let payload: unknown = data;
+  if (typeof data === 'string') {
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return false;
+    }
+  }
+  if (!payload || typeof payload !== 'object') return false;
+  const record = payload as { type?: unknown; dataString?: string };
+  if (record.type === DATA_TYPE) return true;
+  if (typeof record.dataString === 'string') {
+    try {
+      const nested = JSON.parse(record.dataString) as { type?: unknown };
+      return nested.type === DATA_TYPE;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }

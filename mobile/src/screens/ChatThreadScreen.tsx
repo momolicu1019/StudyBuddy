@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
+  addGroupMembers,
   ensureChatSession,
   markConversationRead,
   sendMessage,
@@ -33,8 +34,13 @@ import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChatThread'>;
 
+function memberLabel(count: number): string {
+  return `${count} ${count === 1 ? 'member' : 'members'}`;
+}
+
 export function ChatThreadScreen({ navigation, route }: Props) {
-  const { conversationId, peerName, isGroup } = route.params;
+  const { conversationId, peerName, peerEmail, isGroup, memberCount } =
+    route.params;
   const { session } = useAuth();
   const { showToast } = useApp();
   const insets = useSafeAreaInsets();
@@ -55,27 +61,70 @@ export function ChatThreadScreen({ navigation, route }: Props) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState(peerName);
   const [renaming, setRenaming] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [inviteEmails, setInviteEmails] = useState<string[]>([]);
+  const [inviteDraft, setInviteDraft] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const displayMemberCount = useMemo(() => {
+    if (!isGroup) return 0;
+    if (typeof memberCount === 'number' && memberCount > 0) return memberCount;
+    const fromEmail = Number(String(peerEmail || '').match(/^(\d+)/)?.[1] || 0);
+    return fromEmail > 0 ? fromEmail : 0;
+  }, [isGroup, memberCount, peerEmail]);
 
   useLayoutEffect(() => {
     navigation.setOptions({
       title: peerName || (isGroup ? 'Group chat' : 'Chat'),
+      headerTitle: isGroup
+        ? () => (
+            <View style={styles.headerTitleWrap}>
+              <Text style={styles.headerTitle} numberOfLines={1}>
+                {peerName || 'Group chat'}
+              </Text>
+              <Text style={styles.headerSubtitle} numberOfLines={1}>
+                {displayMemberCount > 0
+                  ? memberLabel(displayMemberCount)
+                  : 'Group chat'}
+              </Text>
+            </View>
+          )
+        : undefined,
       headerRight: isGroup
         ? () => (
-            <Pressable
-              onPress={() => {
-                setRenameDraft(peerName);
-                setRenameOpen(true);
-              }}
-              hitSlop={10}
-              accessibilityLabel="Rename group"
-              style={styles.headerBtn}
-            >
-              <Ionicons name="create-outline" size={22} color={colors.primary} />
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable
+                onPress={() => {
+                  setInviteEmails([]);
+                  setInviteDraft('');
+                  setAddOpen(true);
+                }}
+                hitSlop={10}
+                accessibilityLabel="Add members"
+                style={styles.headerBtn}
+              >
+                <Ionicons
+                  name="person-add-outline"
+                  size={22}
+                  color={colors.primary}
+                />
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setRenameDraft(peerName);
+                  setRenameOpen(true);
+                }}
+                hitSlop={10}
+                accessibilityLabel="Rename group"
+                style={styles.headerBtn}
+              >
+                <Ionicons name="create-outline" size={22} color={colors.primary} />
+              </Pressable>
+            </View>
           )
         : undefined,
     });
-  }, [navigation, peerName, isGroup]);
+  }, [navigation, peerName, isGroup, displayMemberCount]);
 
   // Auth + live message listener — updates as soon as the peer sends.
   useEffect(() => {
@@ -201,6 +250,7 @@ export function ChatThreadScreen({ navigation, route }: Props) {
         peerName: conv.title,
         peerEmail: conv.peer.email,
         isGroup: true,
+        memberCount: conv.members.length,
       });
       setRenameOpen(false);
       showToast('Group name updated');
@@ -208,6 +258,57 @@ export function ChatThreadScreen({ navigation, route }: Props) {
       showToast(e instanceof Error ? e.message : 'Could not rename group');
     } finally {
       setRenaming(false);
+    }
+  };
+
+  const addInviteEmail = () => {
+    const email = inviteDraft.trim().toLowerCase();
+    if (!email) {
+      showToast('Enter a friend’s email');
+      return;
+    }
+    if (inviteEmails.includes(email)) {
+      showToast('That email is already on the list');
+      return;
+    }
+    if (session?.user?.email && email === session.user.email.toLowerCase()) {
+      showToast('You are already in the group');
+      return;
+    }
+    setInviteEmails((prev) => [...prev, email]);
+    setInviteDraft('');
+  };
+
+  const removeInviteEmail = (email: string) => {
+    setInviteEmails((prev) => prev.filter((e) => e !== email));
+  };
+
+  const onAddMembers = async () => {
+    if (inviteEmails.length < 1) {
+      showToast('Add at least one friend’s email');
+      return;
+    }
+    setAdding(true);
+    try {
+      const conv = await addGroupMembers(conversationId, inviteEmails);
+      navigation.setParams({
+        peerName: conv.title,
+        peerEmail: conv.peer.email,
+        isGroup: true,
+        memberCount: conv.members.length,
+      });
+      setAddOpen(false);
+      setInviteEmails([]);
+      setInviteDraft('');
+      showToast(
+        conv.members.length === 1
+          ? 'Member added'
+          : `Group now has ${conv.members.length} members`,
+      );
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not add members');
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -329,6 +430,65 @@ export function ChatThreadScreen({ navigation, route }: Props) {
           onPress={() => void onRename()}
         />
       </AppModal>
+
+      <AppModal
+        visible={addOpen}
+        onClose={() => {
+          setAddOpen(false);
+          setInviteEmails([]);
+          setInviteDraft('');
+        }}
+      >
+        <Text style={styles.modalTitle}>Add members</Text>
+        <Text style={styles.modalHint}>
+          Invite friends by Study Buddy email. They must open Messages once
+          first.
+          {displayMemberCount > 0
+            ? ` This group currently has ${memberLabel(displayMemberCount)}.`
+            : ''}
+        </Text>
+        <View style={styles.addRow}>
+          <TextInput
+            value={inviteDraft}
+            onChangeText={setInviteDraft}
+            autoCapitalize="none"
+            keyboardType="email-address"
+            placeholder="friend@school.edu"
+            placeholderTextColor={colors.muted}
+            style={[styles.renameInput, styles.addInput]}
+            onSubmitEditing={addInviteEmail}
+            returnKeyType="done"
+          />
+          <PrimaryButton
+            label="Add"
+            variant="secondary"
+            onPress={addInviteEmail}
+            style={styles.addBtn}
+          />
+        </View>
+        {inviteEmails.length > 0 ? (
+          <View style={styles.chipWrap}>
+            {inviteEmails.map((email) => (
+              <Pressable
+                key={email}
+                onPress={() => removeInviteEmail(email)}
+                style={styles.chip}
+              >
+                <Text style={styles.chipText}>{email}</Text>
+                <Ionicons name="close" size={14} color={colors.primary} />
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <Text style={styles.memberHint}>
+            Add one or more emails, then tap Invite.
+          </Text>
+        )}
+        <PrimaryButton
+          label={adding ? 'Inviting…' : 'Invite to group'}
+          onPress={() => void onAddMembers()}
+        />
+      </AppModal>
     </KeyboardAvoidingView>
   );
 }
@@ -340,6 +500,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.bg,
+  },
+  headerTitleWrap: {
+    alignItems: Platform.OS === 'ios' ? 'center' : 'flex-start',
+    maxWidth: 220,
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.ink,
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+    marginTop: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
   },
   headerBtn: {
     marginRight: 4,
@@ -428,5 +608,33 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.ink,
     backgroundColor: '#fff',
+  },
+  addRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  addInput: { flex: 1, marginBottom: 10 },
+  addBtn: { marginTop: 0 },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: colors.primarySoft,
+  },
+  chipText: { color: colors.primary, fontSize: 13, fontWeight: '600' },
+  memberHint: {
+    color: colors.muted,
+    fontSize: 13,
+    marginBottom: 14,
   },
 });

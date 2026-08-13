@@ -38,6 +38,7 @@ function openThread(
     peerName: conv.title,
     peerEmail: conv.peer.email,
     isGroup: conv.type === 'group',
+    memberCount: conv.type === 'group' ? conv.members.length : undefined,
   });
 }
 
@@ -313,11 +314,15 @@ export function MessagesScreen({ navigation }: Props) {
                     </View>
                   ) : null}
                 </View>
+                {isGroup ? (
+                  <Text style={styles.memberCount} numberOfLines={1}>
+                    {item.members.length}{' '}
+                    {item.members.length === 1 ? 'member' : 'members'}
+                  </Text>
+                ) : null}
                 <Text style={styles.preview} numberOfLines={1}>
                   {item.last_message ||
-                    (isGroup
-                      ? `${item.members.length} members`
-                      : item.peer.email)}
+                    (isGroup ? 'No messages yet' : item.peer.email)}
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={colors.muted} />
@@ -505,6 +510,11 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1, gap: 2 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   peerName: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.ink },
+  memberCount: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
   badge: {
     minWidth: 20,
     height: 20,

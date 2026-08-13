@@ -203,7 +203,7 @@ export function DeadlinesScreen() {
               <Text style={[styles.sub, { marginTop: 6 }]}>
                 Track assignments and exams. Entries turn amber within a week and
                 red when due tomorrow or overdue — StudyBuddy can notify your
-                phone for amber and red deadlines at 9am, 12nn, 3pm, and 6pm.
+                phone for amber and red deadlines every 2 hours.
               </Text>
             </View>
             {showBulb ? (

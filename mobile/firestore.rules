@@ -73,6 +73,20 @@ service cloud.firestore {
             .hasOnly(['title']);
     }
 
+    // Existing members may invite classmates; membership only grows (no removals).
+    function isGroupMemberAdd() {
+      return resource.data.type == 'group'
+        && request.resource.data.type == 'group'
+        && request.resource.data.memberIds is list
+        && request.resource.data.members is map
+        && request.resource.data.unread is map
+        && request.resource.data.memberIds.size() >= resource.data.memberIds.size()
+        && request.resource.data.memberIds.size() <= 20
+        && request.resource.data.memberIds.hasAll(resource.data.memberIds)
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['memberIds', 'members', 'unread']);
+    }
+
     match /chatConversations/{conversationId} {
       // getDoc on a missing conversation used to fail with
       // "Missing or insufficient permissions" because `resource` is null and
@@ -87,10 +101,11 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.memberIds
         && validMemberMaps()
         && (isDmCreate(conversationId) || isGroupCreate());
-      // Members may update unread/lastMessage, or rename a group title.
+      // Members may update unread/lastMessage, rename a group, or add members.
       allow update: if isConversationMember(conversationId)
         && (
           isGroupTitleUpdate()
+          || isGroupMemberAdd()
           || request.resource.data.memberIds == resource.data.memberIds
         );
       allow delete: if false;

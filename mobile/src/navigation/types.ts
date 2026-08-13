@@ -16,6 +16,8 @@ export type RootStackParamList = {
     peerName: string;
     peerEmail: string;
     isGroup?: boolean;
+    /** Member count for group chats (shown in the thread header). */
+    memberCount?: number;
   };
 };
 

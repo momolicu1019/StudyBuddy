@@ -70,7 +70,9 @@ Starting a DM previously called `getDoc` on a conversation that did not exist ye
 - Each friend must have opened **Messages** at least once (same as DMs)
 - Groups are stored as `chatConversations` docs with `type: "group"` (auto-generated ids)
 - Open a group and tap the pencil in the header to **rename** it — any member can update the name
-- Republish `firestore.rules` after pulling this update — older rules only allow 2-member DMs
+- Open a group and tap the **person-add** icon to **invite more members** by email (membership only grows; max 20)
+- The inbox and group thread header show the current **member count**
+- Republish `firestore.rules` after pulling this update — older rules only allow 2-member DMs / title-only group edits
 
 ### Push notifications (new messages)
 

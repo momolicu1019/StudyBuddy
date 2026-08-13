@@ -114,7 +114,6 @@ export function MessagesScreen({ navigation }: Props) {
           name: session.user.name,
         });
         if (cancelled) return;
-        void registerChatPushForCurrentUser();
         unsub = subscribeConversations(
           (rows, friendRows) => {
             if (cancelled) return;
@@ -131,10 +130,23 @@ export function MessagesScreen({ navigation }: Props) {
             setRefreshing(false);
           },
         );
-        void diagnoseChatPush().then((info) => {
-          if (!cancelled) setPushInfo(info);
-          if (!cancelled && info.expoToken) {
-            void registerChatPushForCurrentUser(info.expoToken);
+        void diagnoseChatPush().then(async (info) => {
+          if (cancelled) return;
+
+          setPushInfo(info);
+
+          if (info.expoToken) {
+            const saved = await registerChatPushForCurrentUser(
+              info.expoToken,
+            );
+
+            if (!cancelled && !saved) {
+              setPushInfo({
+                ...info,
+                error:
+                  'Push token is ready, but it could not be saved to Firestore.',
+              });
+            }
           }
         });
       } catch (e) {
@@ -276,55 +288,80 @@ export function MessagesScreen({ navigation }: Props) {
 
   const runPushSelfTest = async () => {
     if (pushTesting) return;
+
     setPushTesting(true);
+
     setPushInfo((prev) => ({
       permission: prev?.permission ?? 'unknown',
       hasNativeToken: prev?.hasNativeToken ?? false,
       expoToken: prev?.expoToken ?? null,
       isExpoGo: prev?.isExpoGo ?? false,
-      error:
-        'Waiting on Google Play Services for an FCM token (up to ~20s)…',
+      error: 'Checking Expo push registration…',
     }));
+
     try {
       const info = await diagnoseChatPush();
+
       setPushInfo(info);
+
       if (info.error || !info.expoToken) {
-        showToast(info.error || 'Push is not ready on this install.');
+        showToast(
+          info.error || 'Push is not ready on this install.',
+        );
         return;
       }
-      const saved = await registerChatPushForCurrentUser(info.expoToken);
+
+      const saved = await registerChatPushForCurrentUser(
+        info.expoToken,
+      );
+
       if (!saved) {
         showToast(
-          'Token ready on phone, but Firestore expoPushTokens is empty — save failed. Check sign-in / rules.',
+          'Push token is ready, but Firestore could not save it. Check sign-in / Firestore rules.',
         );
+        return;
       }
+
       setPushInfo({
         ...info,
         error: 'Sending Expo→FCM test notification…',
       });
-      const result = await sendSelfTestChatPush();
-      const after = await diagnoseChatPush();
-      setPushInfo(
-        saved
-          ? after
-          : {
-              ...after,
-              error:
-                after.error ||
-                'Token on phone, but not saved to Firestore yet — classmates cannot notify you while closed.',
-            },
+
+      const result = await sendSelfTestChatPush(
+        info.expoToken,
       );
+
       if (result.deliveryError) {
+        setPushInfo({
+          ...info,
+          error: result.deliveryError,
+        });
+
         showToast(result.deliveryError);
       } else if (result.accepted > 0) {
+        setPushInfo({
+          ...info,
+          error: null,
+        });
+
         showToast(
-          'Push test sent. You should see a banner now. Then swipe the app away (don’t Force stop) and have a classmate message you.',
+          'Push test sent successfully. Now swipe StudyBuddy away — do not Force stop it — then send a message from another account.',
         );
       } else {
-        showToast('Push test did not get an Expo ticket — check FCM on EAS.');
+        setPushInfo({
+          ...info,
+          error:
+            'Expo did not accept the push notification. Check FCM credentials on EAS.',
+        });
+
+        showToast(
+          'Push test was not accepted by Expo. Check FCM credentials on EAS.',
+        );
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Push test failed';
+      const message =
+        e instanceof Error ? e.message : 'Push test failed';
+
       setPushInfo((prev) => ({
         permission: prev?.permission ?? 'unknown',
         hasNativeToken: prev?.hasNativeToken ?? false,
@@ -332,6 +369,7 @@ export function MessagesScreen({ navigation }: Props) {
         isExpoGo: prev?.isExpoGo ?? false,
         error: message,
       }));
+
       showToast(message);
     } finally {
       setPushTesting(false);
@@ -471,7 +509,7 @@ export function MessagesScreen({ navigation }: Props) {
                 ? pushInfo.error
                 : pushInfo?.expoToken
                   ? `Ready · token …${pushInfo.expoToken.slice(-12)}`
-                  : 'Checking push registration…'}
+                  : 'Checking Expo push registration…'}
           </Text>
           <PrimaryButton
             label={pushTesting ? 'Testing…' : 'Test push on this phone'}

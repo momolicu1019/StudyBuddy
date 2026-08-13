@@ -186,9 +186,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `${label} timed out after ${Math.round(ms / 1000)}s (Google Play Services may be stuck).`,
+            ),
+          );
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function explainNativePushError(err: unknown): string {
   const raw =
     err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (/timed out|TIMEOUT/i.test(raw)) {
+    return (
+      'Google Play Services is taking too long to give an FCM token. ' +
+      'Check internet, update Play Services, sign into a Google account, ' +
+      'set automatic date & time, wait a minute, then tap Test again.'
+    );
+  }
   if (/SERVICE_NOT_AVAILABLE/i.test(raw)) {
     return (
       'Google Play Services could not reach FCM (SERVICE_NOT_AVAILABLE). ' +
@@ -202,7 +233,7 @@ function explainNativePushError(err: unknown): string {
       'Google Play Services is missing or disabled on this phone — FCM push cannot work here.'
     );
   }
-  if (/TIMEOUT|NETWORK|UNAVAILABLE/i.test(raw)) {
+  if (/NETWORK|UNAVAILABLE/i.test(raw)) {
     return (
       'Network error while fetching the FCM token. Switch Wi‑Fi/mobile data and retry.'
     );
@@ -212,15 +243,19 @@ function explainNativePushError(err: unknown): string {
 }
 
 /**
- * Native FCM/APNs token. Retries SERVICE_NOT_AVAILABLE — it is often transient
- * right after install / Play Services wake-up.
+ * Native FCM/APNs token. Short retries + per-attempt timeout so Test push
+ * cannot hang forever on SERVICE_NOT_AVAILABLE / Play Services stalls.
  */
 async function fetchNativeDevicePushToken(): Promise<string> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      if (attempt > 0) await sleep(700 * attempt);
-      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      if (attempt > 0) await sleep(900);
+      const deviceToken = await withTimeout(
+        Notifications.getDevicePushTokenAsync(),
+        10_000,
+        'FCM device token',
+      );
       const native = String(
         typeof deviceToken === 'string'
           ? deviceToken
@@ -231,8 +266,8 @@ async function fetchNativeDevicePushToken(): Promise<string> {
     } catch (e) {
       lastError = e;
       const msg = e instanceof Error ? e.message : String(e);
-      // Only retry the common transient Play Services race.
-      if (!/SERVICE_NOT_AVAILABLE/i.test(msg)) break;
+      // Retry only transient Play Services races / timeouts.
+      if (!/SERVICE_NOT_AVAILABLE|timed out/i.test(msg)) break;
     }
   }
   throw lastError instanceof Error
@@ -308,7 +343,11 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
     }
 
     try {
-      const token = await Notifications.getExpoPushTokenAsync({ projectId });
+      const token = await withTimeout(
+        Notifications.getExpoPushTokenAsync({ projectId }),
+        12_000,
+        'Expo push token',
+      );
       const expoToken = String(token.data || '').trim() || null;
       return {
         permission,
@@ -327,7 +366,9 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
         isExpoGo: false,
         error:
           e instanceof Error
-            ? `Expo push token failed: ${e.message}`
+            ? /timed out/i.test(e.message)
+              ? explainNativePushError(e)
+              : `Expo push token failed: ${e.message}`
             : 'Expo push token failed.',
       };
     }

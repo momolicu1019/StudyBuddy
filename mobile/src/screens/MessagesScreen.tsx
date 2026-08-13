@@ -274,6 +274,14 @@ export function MessagesScreen({ navigation }: Props) {
   const runPushSelfTest = async () => {
     if (pushTesting) return;
     setPushTesting(true);
+    setPushInfo((prev) => ({
+      permission: prev?.permission ?? 'unknown',
+      hasNativeToken: prev?.hasNativeToken ?? false,
+      expoToken: prev?.expoToken ?? null,
+      isExpoGo: prev?.isExpoGo ?? false,
+      error:
+        'Waiting on Google Play Services for an FCM token (up to ~20s)…',
+    }));
     try {
       const info = await diagnoseChatPush();
       setPushInfo(info);
@@ -281,18 +289,32 @@ export function MessagesScreen({ navigation }: Props) {
         showToast(info.error || 'Push is not ready on this install.');
         return;
       }
+      setPushInfo({
+        ...info,
+        error: 'Sending Expo→FCM test notification…',
+      });
       const result = await sendSelfTestChatPush();
+      const after = await diagnoseChatPush();
+      setPushInfo(after);
       if (result.deliveryError) {
         showToast(result.deliveryError);
       } else if (result.accepted > 0) {
         showToast(
-          'Push test sent. You should see a banner now. Then force-close (swipe away — don’t Force stop) and have a classmate message you.',
+          'Push test sent. You should see a banner now. Then swipe the app away (don’t Force stop) and have a classmate message you.',
         );
       } else {
         showToast('Push test did not get an Expo ticket — check FCM on EAS.');
       }
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Push test failed');
+      const message = e instanceof Error ? e.message : 'Push test failed';
+      setPushInfo((prev) => ({
+        permission: prev?.permission ?? 'unknown',
+        hasNativeToken: prev?.hasNativeToken ?? false,
+        expoToken: prev?.expoToken ?? null,
+        isExpoGo: prev?.isExpoGo ?? false,
+        error: message,
+      }));
+      showToast(message);
     } finally {
       setPushTesting(false);
     }

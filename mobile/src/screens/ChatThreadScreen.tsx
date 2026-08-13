@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -15,14 +15,17 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 
 import {
   ensureChatSession,
   markConversationRead,
   sendMessage,
   subscribeMessages,
+  updateGroupTitle,
   type ChatMessage,
 } from '../api/chatApi';
+import { AppModal, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import { colors } from '../theme/colors';
@@ -30,7 +33,7 @@ import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChatThread'>;
 
-export function ChatThreadScreen({ route }: Props) {
+export function ChatThreadScreen({ navigation, route }: Props) {
   const { conversationId, peerName, isGroup } = route.params;
   const { session } = useAuth();
   const { showToast } = useApp();
@@ -49,6 +52,30 @@ export function ChatThreadScreen({ route }: Props) {
   const [sending, setSending] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameDraft, setRenameDraft] = useState(peerName);
+  const [renaming, setRenaming] = useState(false);
+
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: peerName || (isGroup ? 'Group chat' : 'Chat'),
+      headerRight: isGroup
+        ? () => (
+            <Pressable
+              onPress={() => {
+                setRenameDraft(peerName);
+                setRenameOpen(true);
+              }}
+              hitSlop={10}
+              accessibilityLabel="Rename group"
+              style={styles.headerBtn}
+            >
+              <Ionicons name="create-outline" size={22} color={colors.primary} />
+            </Pressable>
+          )
+        : undefined,
+    });
+  }, [navigation, peerName, isGroup]);
 
   // Auth + live message listener — updates as soon as the peer sends.
   useEffect(() => {
@@ -157,6 +184,33 @@ export function ChatThreadScreen({ route }: Props) {
     }
   };
 
+  const onRename = async () => {
+    const next = renameDraft.trim();
+    if (!next) {
+      showToast('Enter a group name');
+      return;
+    }
+    if (next === peerName) {
+      setRenameOpen(false);
+      return;
+    }
+    setRenaming(true);
+    try {
+      const conv = await updateGroupTitle(conversationId, next);
+      navigation.setParams({
+        peerName: conv.title,
+        peerEmail: conv.peer.email,
+        isGroup: true,
+      });
+      setRenameOpen(false);
+      showToast('Group name updated');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not rename group');
+    } finally {
+      setRenaming(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -254,6 +308,27 @@ export function ChatThreadScreen({ route }: Props) {
           </Pressable>
         </View>
       </View>
+
+      <AppModal visible={renameOpen} onClose={() => setRenameOpen(false)}>
+        <Text style={styles.modalTitle}>Rename group</Text>
+        <Text style={styles.modalHint}>
+          Any member can update the community name. Everyone sees the new name
+          right away.
+        </Text>
+        <TextInput
+          value={renameDraft}
+          onChangeText={setRenameDraft}
+          placeholder="Group name"
+          placeholderTextColor={colors.muted}
+          style={styles.renameInput}
+          maxLength={80}
+          autoFocus
+        />
+        <PrimaryButton
+          label={renaming ? 'Saving…' : 'Save name'}
+          onPress={() => void onRename()}
+        />
+      </AppModal>
     </KeyboardAvoidingView>
   );
 }
@@ -265,6 +340,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.bg,
+  },
+  headerBtn: {
+    marginRight: 4,
+    padding: 4,
   },
   list: { padding: 16, paddingBottom: 8, flexGrow: 1 },
   empty: {
@@ -332,4 +411,22 @@ const styles = StyleSheet.create({
   },
   sendDisabled: { opacity: 0.45 },
   sendText: { color: '#fff', fontWeight: '800' },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.ink,
+    marginBottom: 8,
+  },
+  modalHint: { color: colors.muted, marginBottom: 12, lineHeight: 20 },
+  renameInput: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 14,
+    fontSize: 16,
+    color: colors.ink,
+    backgroundColor: '#fff',
+  },
 });

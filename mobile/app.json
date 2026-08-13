@@ -20,7 +20,7 @@
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "StudyBuddy needs camera access to photograph your notes and generate flashcards.",
         "NSPhotoLibraryUsageDescription": "StudyBuddy needs photo library access to import note images.",
-        "NSUserNotificationsUsageDescription": "StudyBuddy sends reminders when a deadline turns amber (within a week) or red (due soon or overdue)."
+        "NSUserNotificationsUsageDescription": "StudyBuddy sends deadline reminders and notifies you when classmates send new chat messages."
       }
     },
     "android": {

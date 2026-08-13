@@ -72,8 +72,12 @@ type UserDoc = {
   email: string;
   name: string;
   localAuthId: string;
+  /** Expo push tokens for this chat user (multi-device). */
+  expoPushTokens?: string[];
   updatedAt?: unknown;
 };
+
+const MAX_PUSH_TOKENS = 10;
 
 type ConversationDoc = {
   type?: 'dm' | 'group';
@@ -282,7 +286,74 @@ async function upsertProfile(user: User, input: {
 export async function clearChatSession(): Promise<void> {
   if (!isFirebaseConfigured()) return;
   try {
-    await signOut(getFirebaseAuth());
+    const auth = getFirebaseAuth();
+    const uid = auth.currentUser?.uid;
+    if (uid) {
+      try {
+        const { getCurrentChatPushToken } = await import('./chatNotifications');
+        const token = await getCurrentChatPushToken();
+        if (token) await unregisterChatPushToken(token);
+      } catch {
+        // ignore push cleanup failures on sign-out
+      }
+    }
+    await signOut(auth);
+  } catch {
+    // ignore
+  }
+}
+
+/** Persist this device's Expo push token on the signed-in chat profile. */
+export async function registerChatPushForCurrentUser(): Promise<void> {
+  if (!isChatApiConfigured()) return;
+  try {
+    const uid = await requireUid();
+    const { registerChatPushToken, ensureChatNotificationHandler } =
+      await import('./chatNotifications');
+    ensureChatNotificationHandler();
+    const token = await registerChatPushToken();
+    if (!token) return;
+
+    const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
+    const snap = await getDoc(userRef);
+    const existing = snap.exists()
+      ? ((snap.data() as UserDoc).expoPushTokens || [])
+      : [];
+    const next = Array.from(new Set([token, ...existing])).slice(
+      0,
+      MAX_PUSH_TOKENS,
+    );
+    if (
+      next.length === existing.length &&
+      next.every((t, i) => t === existing[i])
+    ) {
+      return;
+    }
+    await updateDoc(userRef, {
+      expoPushTokens: next,
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Push is best-effort — chat still works without it.
+  }
+}
+
+/** Remove a device token from the current chat profile (e.g. on sign-out). */
+export async function unregisterChatPushToken(token: string): Promise<void> {
+  const value = token.trim();
+  if (!value || !isChatApiConfigured()) return;
+  try {
+    const uid = await requireUid();
+    const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
+    const snap = await getDoc(userRef);
+    if (!snap.exists()) return;
+    const existing = (snap.data() as UserDoc).expoPushTokens || [];
+    const next = existing.filter((t) => t !== value);
+    if (next.length === existing.length) return;
+    await updateDoc(userRef, {
+      expoPushTokens: next,
+      updatedAt: serverTimestamp(),
+    });
   } catch {
     // ignore
   }
@@ -649,6 +720,44 @@ export async function createGroupChat(input: {
   }
 }
 
+/** Rename a group chat. Any member can update the community name. */
+export async function updateGroupTitle(
+  conversationId: string,
+  titleRaw: string,
+): Promise<ChatConversation> {
+  try {
+    const uid = await requireUid();
+    const title = titleRaw.trim().replace(/\s+/g, ' ');
+    if (!title) throw new Error('Enter a group name');
+    if (title.length > 80) throw new Error('Group name is too long');
+
+    const db = getFirestoreDb();
+    const convRef = doc(db, 'chatConversations', conversationId);
+    const convSnap = await getDoc(convRef);
+    if (!convSnap.exists()) throw new Error('Conversation not found');
+    const conv = convSnap.data() as ConversationDoc;
+    if (!(conv.memberIds || []).includes(uid)) {
+      throw new Error('Not a member of this conversation');
+    }
+    if (conv.type !== 'group') {
+      throw new Error('Only group chats can be renamed');
+    }
+
+    await updateDoc(convRef, { title });
+    const mapped = mapConversation(
+      {
+        id: conversationId,
+        data: () => ({ ...conv, title }),
+      },
+      uid,
+    );
+    if (!mapped) throw new Error('Could not rename group');
+    return mapped;
+  } catch (err) {
+    throw mapChatError(err, 'Could not rename group');
+  }
+}
+
 export async function listMessages(
   conversationId: string,
   opts?: { afterId?: string; limit?: number },
@@ -733,24 +842,35 @@ export async function sendMessage(
     // remote listeners receive a concrete createdAt (serverTimestamp is null
     // until the write resolves, which can delay remote ordering).
     const createdAt = Timestamp.now();
+    const unreadBeforeByMember: Record<string, number> = {};
+    const unreadUpdate: Record<string, number> = { ...(conv.unread || {}) };
+    for (const memberId of conv.memberIds || []) {
+      unreadBeforeByMember[memberId] = Number(unreadUpdate[memberId] || 0);
+      if (memberId === uid) unreadUpdate[memberId] = 0;
+      else unreadUpdate[memberId] = unreadBeforeByMember[memberId] + 1;
+    }
+
     const batch = writeBatch(db);
     batch.set(messageRef, {
       senderId: uid,
       body,
       createdAt,
     });
-
-    const unreadUpdate: Record<string, number> = { ...(conv.unread || {}) };
-    for (const memberId of conv.memberIds || []) {
-      if (memberId === uid) unreadUpdate[memberId] = 0;
-      else unreadUpdate[memberId] = Number(unreadUpdate[memberId] || 0) + 1;
-    }
     batch.update(convRef, {
       lastMessage: body.slice(0, 200),
       lastMessageAt: createdAt,
       unread: unreadUpdate,
     });
     await batch.commit();
+
+    // Push notify other members (best-effort; never fail the send).
+    void notifyConversationMembers({
+      conversationId,
+      conv,
+      senderId: uid,
+      body,
+      unreadBeforeByMember,
+    });
 
     return {
       id: messageRef.id,
@@ -761,6 +881,65 @@ export async function sendMessage(
     };
   } catch (err) {
     throw mapChatError(err, 'Could not send message');
+  }
+}
+
+async function notifyConversationMembers(input: {
+  conversationId: string;
+  conv: ConversationDoc;
+  senderId: string;
+  body: string;
+  unreadBeforeByMember: Record<string, number>;
+}): Promise<void> {
+  try {
+    const {
+      chatNotificationTitle,
+      sendChatPushNotifications,
+    } = await import('./chatNotifications');
+
+    const isGroup = input.conv.type === 'group';
+    const senderName =
+      input.conv.members?.[input.senderId]?.name?.trim() || 'Student';
+    const groupTitle =
+      (input.conv.title || 'Group chat').trim() || 'Group chat';
+    const fromLabel = isGroup ? groupTitle : senderName;
+    const peerEmail = isGroup
+      ? `${(input.conv.memberIds || []).length} members`
+      : input.conv.members?.[input.senderId]?.email || '';
+
+    const recipientIds = (input.conv.memberIds || []).filter(
+      (id) => id !== input.senderId,
+    );
+    if (recipientIds.length === 0) return;
+
+    const db = getFirestoreDb();
+    for (const memberId of recipientIds) {
+      try {
+        const snap = await getDoc(doc(db, 'chatUsers', memberId));
+        if (!snap.exists()) continue;
+        const memberTokens = (snap.data() as UserDoc).expoPushTokens || [];
+        if (memberTokens.length === 0) continue;
+        const unreadBefore = Number(
+          input.unreadBeforeByMember[memberId] || 0,
+        );
+        await sendChatPushNotifications({
+          tokens: memberTokens,
+          title: chatNotificationTitle(fromLabel, unreadBefore),
+          body: input.body,
+          data: {
+            type: 'chat',
+            conversationId: input.conversationId,
+            peerName: fromLabel,
+            peerEmail,
+            isGroup,
+          },
+        });
+      } catch {
+        // skip members we cannot notify
+      }
+    }
+  } catch {
+    // ignore push failures
   }
 }
 

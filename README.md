@@ -36,7 +36,7 @@ On-device code lives in `mobile/src/storage/`. Sign in is optional via the login
 - Flashcard study mode
 - Quiz mode with scoring
 - AI Tutor chat (on-device helpers)
-- **Student Messages** — 1:1 DMs via Firebase Auth + Cloud Firestore (chat icon next to profile)
+- **Student Messages** — 1:1 DMs + group chats via Firebase Auth + Cloud Firestore (chat icon next to profile), with push notifications for new messages and in-thread group rename
 - Pomodoro focus timer
 - Study progress stats
 

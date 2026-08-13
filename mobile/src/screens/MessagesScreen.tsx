@@ -16,6 +16,7 @@ import {
   ensureChatSession,
   isChatApiConfigured,
   openDm,
+  registerChatPushForCurrentUser,
   subscribeConversations,
   type ChatConversation,
 } from '../api/chatApi';
@@ -90,6 +91,7 @@ export function MessagesScreen({ navigation }: Props) {
           name: session.user.name,
         });
         if (cancelled) return;
+        void registerChatPushForCurrentUser();
         unsub = subscribeConversations(
           (rows) => {
             if (cancelled) return;

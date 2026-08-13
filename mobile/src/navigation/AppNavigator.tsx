@@ -25,8 +25,13 @@ import { useAuth, useAuthInitials } from '../context/AuthContext';
 import {
   ensureChatSession,
   isChatApiConfigured,
+  registerChatPushForCurrentUser,
   subscribeUnreadTotal,
 } from '../api/chatApi';
+import {
+  isChatNotificationResponse,
+  type ChatNotificationData,
+} from '../api/chatNotifications';
 import { AboutModal } from '../screens/AboutModal';
 import { AccountModal } from '../screens/AccountModal';
 import { AITutorScreen } from '../screens/AITutorScreen';
@@ -53,6 +58,16 @@ export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 function openDeadlinesFromNotification() {
   if (!navigationRef.isReady()) return;
   navigationRef.navigate('Deadlines');
+}
+
+function openChatFromNotification(data: ChatNotificationData) {
+  if (!navigationRef.isReady()) return;
+  navigationRef.navigate('ChatThread', {
+    conversationId: data.conversationId,
+    peerName: data.peerName || 'Chat',
+    peerEmail: data.peerEmail || '',
+    isGroup: Boolean(data.isGroup),
+  });
 }
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -114,6 +129,7 @@ function BrandHeader() {
           name: session.user.name,
         });
         if (cancelled) return;
+        void registerChatPushForCurrentUser();
         unsub = subscribeUnreadTotal(
           (total) => {
             if (!cancelled) setUnreadTotal(total);
@@ -269,30 +285,37 @@ export function AppNavigator() {
   const { ready, isSignedIn, skippedLogin } = useAuth();
   const showLogin = ready && !isSignedIn && !skippedLogin;
   const pendingDeadlineTap = useRef(false);
+  const pendingChatTap = useRef<ChatNotificationData | null>(null);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
 
-    const responseSub = Notifications.addNotificationResponseReceivedListener(
-      (response) => {
-        const data = response.notification.request.content.data;
-        if (!isDeadlineNotificationResponse(data)) return;
+    const handleResponseData = (data: unknown) => {
+      if (isChatNotificationResponse(data)) {
+        if (navigationRef.isReady() && !showLogin) {
+          openChatFromNotification(data);
+        } else {
+          pendingChatTap.current = data;
+        }
+        return;
+      }
+      if (isDeadlineNotificationResponse(data)) {
         if (navigationRef.isReady() && !showLogin) {
           openDeadlinesFromNotification();
         } else {
           pendingDeadlineTap.current = true;
         }
+      }
+    };
+
+    const responseSub = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        handleResponseData(response.notification.request.content.data);
       },
     );
 
     void Notifications.getLastNotificationResponseAsync().then((response) => {
-      const data = response?.notification.request.content.data;
-      if (!isDeadlineNotificationResponse(data)) return;
-      if (navigationRef.isReady() && !showLogin) {
-        openDeadlinesFromNotification();
-      } else {
-        pendingDeadlineTap.current = true;
-      }
+      handleResponseData(response?.notification.request.content.data);
     });
 
     return () => {
@@ -306,6 +329,17 @@ export function AppNavigator() {
       if (!pendingDeadlineTap.current) return;
       pendingDeadlineTap.current = false;
       openDeadlinesFromNotification();
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [showLogin, ready]);
+
+  useEffect(() => {
+    if (showLogin || !pendingChatTap.current) return;
+    const pending = pendingChatTap.current;
+    const timer = setTimeout(() => {
+      if (!pendingChatTap.current) return;
+      pendingChatTap.current = null;
+      openChatFromNotification(pending);
     }, 350);
     return () => clearTimeout(timer);
   }, [showLogin, ready]);

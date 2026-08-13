@@ -722,6 +722,37 @@ export async function sendMessage(
   }
 }
 
+/** Live unread total across all conversations for the current user. */
+export function subscribeUnreadTotal(
+  onChange: (total: number) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  const auth = getFirebaseAuth();
+  const uid = auth.currentUser?.uid;
+  if (!uid) {
+    onChange(0);
+    return () => undefined;
+  }
+
+  const db = getFirestoreDb();
+  const q = query(
+    collection(db, 'chatConversations'),
+    where('memberIds', 'array-contains', uid),
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      let total = 0;
+      for (const docSnap of snap.docs) {
+        const data = docSnap.data() as ConversationDoc;
+        total += Number(data.unread?.[uid] || 0);
+      }
+      onChange(total);
+    },
+    (err) => onError?.(err),
+  );
+}
+
 /** Live message subscription (replaces polling when used). */
 export function subscribeMessages(
   conversationId: string,

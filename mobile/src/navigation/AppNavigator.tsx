@@ -36,6 +36,7 @@ import {
 import {
   ensureChatNotificationHandler,
   parseChatNotificationData,
+  startChatPushRegistrationRetries,
   subscribeChatPushTokenRefresh,
   type ChatNotificationData,
 } from '../api/chatNotifications';
@@ -332,6 +333,7 @@ export function AppNavigator() {
 
     let cancelled = false;
     let tokenUnsub: (() => void) | undefined;
+    let retryUnsub: (() => void) | undefined;
     void (async () => {
       try {
         const me = await ensureChatSession({
@@ -341,6 +343,10 @@ export function AppNavigator() {
         });
         if (cancelled) return;
         void registerChatPushForCurrentUser();
+        // Play Services often needs repeated attempts after cold start.
+        retryUnsub = startChatPushRegistrationRetries(() =>
+          registerChatPushForCurrentUser(),
+        );
         startChatIncomingWatcher(me.id);
         tokenUnsub = subscribeChatPushTokenRefresh(() => {
           void registerChatPushForCurrentUser();
@@ -361,6 +367,7 @@ export function AppNavigator() {
     return () => {
       cancelled = true;
       tokenUnsub?.();
+      retryUnsub?.();
       appStateSub.remove();
       stopChatIncomingWatcher();
     };

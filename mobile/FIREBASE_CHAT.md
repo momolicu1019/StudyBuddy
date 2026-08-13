@@ -152,14 +152,17 @@ Try:
 
 That error is from **Google Play Services on the phone**, not from missing EAS credentials. The app never got a native FCM token, so closed-app push cannot work yet.
 
-Try on the phone:
+The app keeps retrying registration in the background for about two minutes after sign-in — stay on the app with internet.
 
-1. Stable internet (try toggling Wi‑Fi / mobile data)
+Also try on the phone:
+
+1. Prefer **mobile data** if Wi‑Fi DNS is flaky
 2. Update **Google Play Services** (Play Store → profile → Settings → About → Update Play services)
 3. Sign in with a **Google account** on the device
 4. Settings → System → Date & time → **Automatic date & time** ON
-5. Reopen StudyBuddy and tap **Test push on this phone** again
-6. Do **not** use Settings → Apps → StudyBuddy → **Force stop** (that can keep FCM blocked)
+5. Settings → Apps → **Google Play Services** → Storage → **Clear cache**
+6. Reboot the phone, open StudyBuddy, wait 1–2 minutes, tap **Test push** again
+7. Do **not** use Settings → Apps → StudyBuddy → **Force stop** (that can keep FCM blocked)
 
 If it still fails on one phone but works on another, the failing device’s Play Services / network / OEM restrictions are the blocker.
 

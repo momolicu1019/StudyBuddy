@@ -163,6 +163,42 @@ async function ensurePermissionsAndChannel(): Promise<boolean> {
   return status === 'granted';
 }
 
+/**
+ * Get the native Android FCM registration token.
+ *
+ * This does NOT contact Expo Push Service.
+ */
+export async function getCurrentNativeFcmToken(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+
+  try {
+    const current = await Notifications.getPermissionsAsync();
+
+    if (current.status !== 'granted') {
+      return null;
+    }
+
+    const deviceToken =
+      await Notifications.getDevicePushTokenAsync();
+
+    if (String(deviceToken.type).toLowerCase() !== 'android') {
+      return null;
+    }
+
+    const value = String(deviceToken.data || '').trim();
+
+    return value || null;
+  } catch (error) {
+    setLastPushDeliveryError(
+      error instanceof Error
+        ? `FCM token error: ${error.message}`
+        : 'Could not get FCM token.',
+    );
+
+    return null;
+  }
+}
+
 /** Read the current Expo push token without prompting for permission. */
 export async function getCurrentChatPushToken(): Promise<string | null> {
   if (!canUsePush()) return null;
@@ -175,49 +211,6 @@ export async function getCurrentChatPushToken(): Promise<string | null> {
     const value = String(token.data || '').trim();
     return value || null;
   } catch {
-    return null;
-  }
-}
-
-/**
- * Read this device's native FCM (Android) / APNs (iOS) registration token.
- * Prompts for notification permission when needed.
- */
-export async function getCurrentNativeFcmToken(): Promise<string | null> {
-  if (!canUsePush()) return null;
-
-  try {
-    const granted = await ensurePermissionsAndChannel();
-    if (!granted) {
-      setLastPushDeliveryError(
-        'Notification permission is off — enable it for closed-app chat alerts.',
-      );
-      return null;
-    }
-
-    const deviceToken = await withTimeout(
-      Notifications.getDevicePushTokenAsync(),
-      20_000,
-      'Native FCM token',
-    );
-
-    const value = String(deviceToken?.data || '').trim();
-    if (!value) {
-      setLastPushDeliveryError(
-        'Could not get a native FCM token on this device.',
-      );
-      return null;
-    }
-
-    return value;
-  } catch (e) {
-    const raw =
-      e instanceof Error ? e.message : typeof e === 'string' ? e : '';
-    setLastPushDeliveryError(
-      raw
-        ? `Native FCM token failed: ${raw}`
-        : 'Could not get a native FCM token on this device.',
-    );
     return null;
   }
 }

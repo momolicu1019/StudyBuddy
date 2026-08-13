@@ -402,32 +402,6 @@ export async function registerChatPushForCurrentUser(
   }
 }
 
-/** Drop invalid Expo tokens from a chat profile (best-effort). */
-async function pruneChatPushTokens(
-  memberId: string,
-  badTokens: string[],
-): Promise<void> {
-  const remove = new Set(
-    badTokens.map((t) => String(t || '').trim()).filter(Boolean),
-  );
-  if (remove.size === 0) return;
-  try {
-    const userRef = doc(getFirestoreDb(), 'chatUsers', memberId);
-    const snap = await getDoc(userRef);
-    if (!snap.exists()) return;
-    const existing = (snap.data() as UserDoc).expoPushTokens || [];
-    const next = existing.filter((t) => !remove.has(t));
-    if (next.length === existing.length) return;
-    await setDoc(
-      userRef,
-      { expoPushTokens: next, updatedAt: serverTimestamp() },
-      { merge: true },
-    );
-  } catch {
-    // ignore prune failures
-  }
-}
-
 /** Remove a device token from the current chat profile (e.g. on sign-out). */
 export async function unregisterChatPushToken(token: string): Promise<void> {
   const value = token.trim();
@@ -1156,12 +1130,10 @@ export async function sendMessage(
     // remote listeners receive a concrete createdAt (serverTimestamp is null
     // until the write resolves, which can delay remote ordering).
     const createdAt = Timestamp.now();
-    const unreadBeforeByMember: Record<string, number> = {};
     const unreadUpdate: Record<string, number> = { ...(conv.unread || {}) };
     for (const memberId of conv.memberIds || []) {
-      unreadBeforeByMember[memberId] = Number(unreadUpdate[memberId] || 0);
       if (memberId === uid) unreadUpdate[memberId] = 0;
-      else unreadUpdate[memberId] = unreadBeforeByMember[memberId] + 1;
+      else unreadUpdate[memberId] = Number(unreadUpdate[memberId] || 0) + 1;
     }
 
     const batch = writeBatch(db);
@@ -1177,24 +1149,6 @@ export async function sendMessage(
     });
     await batch.commit();
 
-    // Push notify other members (best-effort; never fail the send).
-    // Wait long enough for Expo tickets + receipts so closed-app delivery
-    // errors (InvalidCredentials, empty tokens) can surface to the sender.
-    try {
-      await Promise.race([
-        notifyConversationMembers({
-          conversationId,
-          conv,
-          senderId: uid,
-          body,
-          unreadBeforeByMember,
-        }),
-        new Promise<void>((resolve) => setTimeout(resolve, 4500)),
-      ]);
-    } catch {
-      // ignore push failures
-    }
-
     return {
       id: messageRef.id,
       conversation_id: conversationId,
@@ -1204,70 +1158,6 @@ export async function sendMessage(
     };
   } catch (err) {
     throw mapChatError(err, 'Could not send message');
-  }
-}
-
-async function notifyConversationMembers(input: {
-  conversationId: string;
-  conv: ConversationDoc;
-  senderId: string;
-  body: string;
-  unreadBeforeByMember: Record<string, number>;
-}): Promise<void> {
-  try {
-    const {
-      chatNotificationTitle,
-      sendChatPushNotifications,
-      consumeLastPushDeliveryError,
-    } = await import('./chatNotifications');
-    // Clear any stale registration error before fan-out.
-    consumeLastPushDeliveryError();
-
-    const isGroup = input.conv.type === 'group';
-    const senderName =
-      input.conv.members?.[input.senderId]?.name?.trim() || 'Student';
-    const groupTitle =
-      (input.conv.title || 'Group chat').trim() || 'Group chat';
-    const fromLabel = isGroup ? groupTitle : senderName;
-    const peerEmail = isGroup
-      ? `${(input.conv.memberIds || []).length} members`
-      : input.conv.members?.[input.senderId]?.email || '';
-
-    const recipientIds = (input.conv.memberIds || []).filter(
-      (id) => id !== input.senderId,
-    );
-    if (recipientIds.length === 0) return;
-
-    const db = getFirestoreDb();
-    for (const memberId of recipientIds) {
-      try {
-        const snap = await getDoc(doc(db, 'chatUsers', memberId));
-        if (!snap.exists()) continue;
-        const memberTokens = (snap.data() as UserDoc).expoPushTokens || [];
-        const unreadBefore = Number(
-          input.unreadBeforeByMember[memberId] || 0,
-        );
-        const result = await sendChatPushNotifications({
-          tokens: memberTokens,
-          title: chatNotificationTitle(fromLabel, unreadBefore),
-          body: input.body,
-          data: {
-            type: 'chat',
-            conversationId: input.conversationId,
-            peerName: fromLabel,
-            peerEmail,
-            isGroup,
-          },
-        });
-        if (result.badTokens.length > 0) {
-          void pruneChatPushTokens(memberId, result.badTokens);
-        }
-      } catch {
-        // skip members we cannot notify
-      }
-    }
-  } catch {
-    // ignore push failures
   }
 }
 

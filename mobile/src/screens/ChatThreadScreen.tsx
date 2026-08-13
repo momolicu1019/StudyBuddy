@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -12,11 +13,12 @@ import {
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useHeaderHeight } from '@react-navigation/elements';
+import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   ensureChatSession,
-  listMessages,
+  markConversationRead,
   sendMessage,
   subscribeMessages,
   type ChatMessage,
@@ -29,54 +31,110 @@ import type { RootStackParamList } from '../navigation/types';
 type Props = NativeStackScreenProps<RootStackParamList, 'ChatThread'>;
 
 export function ChatThreadScreen({ route }: Props) {
-  const { conversationId, peerName } = route.params;
+  const { conversationId, peerName, isGroup } = route.params;
   const { session } = useAuth();
   const { showToast } = useApp();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
+  const isFocused = useIsFocused();
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const lastCountRef = useRef(0);
+  const focusedRef = useRef(isFocused);
+  focusedRef.current = isFocused;
 
   const [myId, setMyId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-  const loadInitial = useCallback(async () => {
+  // Auth + live message listener — updates as soon as the peer sends.
+  useEffect(() => {
     if (!session?.user) return;
-    try {
-      const me = await ensureChatSession({
-        id: session.user.id,
-        email: session.user.email,
-        name: session.user.name,
-      });
-      setMyId(me.id);
-      // Seed once; live listener keeps the thread updated.
-      const rows = await listMessages(conversationId, { limit: 100 });
-      setMessages(rows);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Could not load chat');
-    } finally {
-      setLoading(false);
+
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const me = await ensureChatSession({
+          id: session.user.id,
+          email: session.user.email,
+          name: session.user.name,
+        });
+        if (cancelled) return;
+        setMyId(me.id);
+        unsub = subscribeMessages(
+          conversationId,
+          (rows) => {
+            if (cancelled) return;
+            setMessages(rows);
+            setLoading(false);
+            if (rows.length > lastCountRef.current) {
+              requestAnimationFrame(() => {
+                listRef.current?.scrollToEnd({ animated: true });
+              });
+            }
+            lastCountRef.current = rows.length;
+            if (focusedRef.current) {
+              void markConversationRead(conversationId);
+            }
+          },
+          (err) => {
+            if (cancelled) return;
+            setLoading(false);
+            showToast(err.message || 'Could not sync chat');
+          },
+        );
+      } catch (e) {
+        if (cancelled) return;
+        setLoading(false);
+        showToast(e instanceof Error ? e.message : 'Could not load chat');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [
+    conversationId,
+    session?.user?.id,
+    session?.user?.email,
+    session?.user?.name,
+    showToast,
+  ]);
+
+  useEffect(() => {
+    if (isFocused) {
+      void markConversationRead(conversationId);
     }
-  }, [conversationId, session, showToast]);
+  }, [conversationId, isFocused]);
 
+  // Keep composer above the software keyboard on iOS and Android.
   useEffect(() => {
-    void loadInitial();
-  }, [loadInitial]);
-
-  // Realtime Firestore subscription while this thread is open.
-  useEffect(() => {
-    if (!myId) return;
-    const unsub = subscribeMessages(
-      conversationId,
-      (rows) => setMessages(rows),
-      () => {
-        // Ignore transient listener errors; pull-to-refresh path still works via remount.
-      },
-    );
-    return () => unsub();
-  }, [conversationId, myId]);
+    const showEvent =
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent =
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardVisible(true);
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToEnd({ animated: true });
+      });
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardVisible(false);
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const onSend = async () => {
     const body = input.trim();
@@ -107,59 +165,94 @@ export function ChatThreadScreen({ route }: Props) {
     );
   }
 
+  // Stack screen has no tab bar; lift by full keyboard height on Android.
+  const iosOffset = headerHeight + 12;
+  const androidLift = keyboardHeight > 0 ? keyboardHeight : 0;
+
   return (
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={headerHeight}
+      keyboardVerticalOffset={iosOffset}
+      enabled={Platform.OS === 'ios'}
     >
-      <FlatList
-        ref={listRef}
-        data={messages}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-        ListEmptyComponent={
-          <Text style={styles.empty}>
-            Say hi to {peerName}. Messages sync when both of you are online.
-          </Text>
-        }
-        renderItem={({ item }) => {
-          const mine = myId != null && item.sender_id === myId;
-          return (
-            <View
-              style={[styles.bubble, mine ? styles.mine : styles.theirs]}
-            >
-              <Text style={[styles.bubbleText, mine && styles.mineText]}>
-                {item.body}
-              </Text>
-            </View>
-          );
-        }}
-      />
-
       <View
         style={[
-          styles.composer,
-          { paddingBottom: Math.max(insets.bottom, 10) },
+          styles.screen,
+          Platform.OS === 'android' && androidLift > 0
+            ? { paddingBottom: androidLift }
+            : null,
         ]}
       >
-        <TextInput
-          value={input}
-          onChangeText={setInput}
-          placeholder={`Message ${peerName}`}
-          placeholderTextColor={colors.muted}
-          style={styles.input}
-          multiline
-          maxLength={4000}
+        <FlatList
+          ref={listRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          onContentSizeChange={() =>
+            listRef.current?.scrollToEnd({ animated: false })
+          }
+          ListEmptyComponent={
+            <Text style={styles.empty}>
+              {isGroup
+                ? `Say hi to ${peerName}. Group messages sync when members are online.`
+                : `Say hi to ${peerName}. Messages sync when both of you are online.`}
+            </Text>
+          }
+          renderItem={({ item }) => {
+            const mine = myId != null && item.sender_id === myId;
+            return (
+              <View
+                style={[styles.bubble, mine ? styles.mine : styles.theirs]}
+              >
+                {isGroup && !mine && item.sender_name ? (
+                  <Text style={styles.senderName}>{item.sender_name}</Text>
+                ) : null}
+                <Text style={[styles.bubbleText, mine && styles.mineText]}>
+                  {item.body}
+                </Text>
+              </View>
+            );
+          }}
         />
-        <Pressable
-          onPress={() => void onSend()}
-          style={[styles.send, (!input.trim() || sending) && styles.sendDisabled]}
-          disabled={!input.trim() || sending}
+
+        <View
+          style={[
+            styles.composer,
+            {
+              paddingBottom: keyboardVisible
+                ? 10
+                : Math.max(insets.bottom, 10),
+            },
+          ]}
         >
-          <Text style={styles.sendText}>{sending ? '…' : 'Send'}</Text>
-        </Pressable>
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            placeholder={`Message ${peerName}`}
+            placeholderTextColor={colors.muted}
+            style={styles.input}
+            multiline
+            maxLength={4000}
+            onFocus={() => {
+              requestAnimationFrame(() => {
+                listRef.current?.scrollToEnd({ animated: true });
+              });
+            }}
+          />
+          <Pressable
+            onPress={() => void onSend()}
+            style={[
+              styles.send,
+              (!input.trim() || sending) && styles.sendDisabled,
+            ]}
+            disabled={!input.trim() || sending}
+          >
+            <Text style={styles.sendText}>{sending ? '…' : 'Send'}</Text>
+          </Pressable>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -199,6 +292,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     borderBottomLeftRadius: 4,
+  },
+  senderName: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 4,
   },
   bubbleText: { color: colors.ink, fontSize: 15, lineHeight: 21 },
   mineText: { color: '#fff' },

@@ -15,6 +15,7 @@ export type RootStackParamList = {
     conversationId: string;
     peerName: string;
     peerEmail: string;
+    isGroup?: boolean;
   };
 };
 

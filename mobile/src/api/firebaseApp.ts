@@ -5,7 +5,12 @@
 
 import { FirebaseApp, getApp, getApps, initializeApp } from 'firebase/app';
 import { Auth, getAuth } from 'firebase/auth';
-import { Firestore, getFirestore } from 'firebase/firestore';
+import {
+  Firestore,
+  getFirestore,
+  initializeFirestore,
+  memoryLocalCache,
+} from 'firebase/firestore';
 
 export type FirebaseWebConfig = {
   apiKey: string;
@@ -68,6 +73,17 @@ export function getFirebaseAuth(): Auth {
 
 export function getFirestoreDb(): Firestore {
   if (db) return db;
-  db = getFirestore(getFirebaseApp());
+  // React Native / Expo often cannot keep the default WebChannel stream alive,
+  // so live listeners only refresh on the next explicit fetch (e.g. opening a
+  // chat). Force long-polling so message + conversation snapshots sync live.
+  try {
+    db = initializeFirestore(getFirebaseApp(), {
+      experimentalForceLongPolling: true,
+      localCache: memoryLocalCache(),
+    });
+  } catch {
+    // Fast refresh / remount may already have initialized Firestore.
+    db = getFirestore(getFirebaseApp());
+  }
   return db;
 }

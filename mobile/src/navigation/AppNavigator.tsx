@@ -22,6 +22,11 @@ import * as Notifications from 'expo-notifications';
 import { Toast } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth, useAuthInitials } from '../context/AuthContext';
+import {
+  ensureChatSession,
+  isChatApiConfigured,
+  subscribeUnreadTotal,
+} from '../api/chatApi';
 import { AboutModal } from '../screens/AboutModal';
 import { AccountModal } from '../screens/AccountModal';
 import { AITutorScreen } from '../screens/AITutorScreen';
@@ -85,8 +90,51 @@ const TAB_META: Record<
 
 function BrandHeader() {
   const initials = useAuthInitials();
+  const { session, isSignedIn, skippedLogin } = useAuth();
   const [accountOpen, setAccountOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [unreadTotal, setUnreadTotal] = useState(0);
+
+  const canChat = isSignedIn && !skippedLogin && Boolean(session?.user);
+
+  useEffect(() => {
+    if (!canChat || !session?.user || !isChatApiConfigured()) {
+      setUnreadTotal(0);
+      return;
+    }
+
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        await ensureChatSession({
+          id: session.user.id,
+          email: session.user.email,
+          name: session.user.name,
+        });
+        if (cancelled) return;
+        unsub = subscribeUnreadTotal(
+          (total) => {
+            if (!cancelled) setUnreadTotal(total);
+          },
+          () => {
+            if (!cancelled) setUnreadTotal(0);
+          },
+        );
+      } catch {
+        if (!cancelled) setUnreadTotal(0);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [canChat, session?.user?.id, session?.user?.email, session?.user?.name]);
+
+  const unreadLabel =
+    unreadTotal > 99 ? '99+' : unreadTotal > 0 ? String(unreadTotal) : null;
 
   return (
     <>
@@ -109,9 +157,18 @@ function BrandHeader() {
               if (navigationRef.isReady()) navigationRef.navigate('Messages');
             }}
             accessibilityRole="button"
-            accessibilityLabel="Messages"
+            accessibilityLabel={
+              unreadLabel
+                ? `Messages, ${unreadTotal} unread`
+                : 'Messages'
+            }
           >
             <Ionicons name="chatbubbles-outline" size={22} color={colors.primary} />
+            {unreadLabel ? (
+              <View style={styles.chatBadge}>
+                <Text style={styles.chatBadgeText}>{unreadLabel}</Text>
+              </View>
+            ) : null}
           </Pressable>
           <Pressable style={styles.avatar} onPress={() => setAccountOpen(true)}>
             <Text style={styles.avatarText}>{initials}</Text>
@@ -389,6 +446,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  chatBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#FF0000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatBadgeText: {
+    color: '#FF0000',
+    fontSize: 10,
+    fontWeight: '800',
+    lineHeight: 12,
   },
   avatar: {
     width: 40,

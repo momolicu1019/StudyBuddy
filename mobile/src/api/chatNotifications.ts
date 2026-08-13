@@ -179,6 +179,49 @@ export async function getCurrentChatPushToken(): Promise<string | null> {
   }
 }
 
+/**
+ * Read this device's native FCM (Android) / APNs (iOS) registration token.
+ * Prompts for notification permission when needed.
+ */
+export async function getCurrentNativeFcmToken(): Promise<string | null> {
+  if (!canUsePush()) return null;
+
+  try {
+    const granted = await ensurePermissionsAndChannel();
+    if (!granted) {
+      setLastPushDeliveryError(
+        'Notification permission is off — enable it for closed-app chat alerts.',
+      );
+      return null;
+    }
+
+    const deviceToken = await withTimeout(
+      Notifications.getDevicePushTokenAsync(),
+      20_000,
+      'Native FCM token',
+    );
+
+    const value = String(deviceToken?.data || '').trim();
+    if (!value) {
+      setLastPushDeliveryError(
+        'Could not get a native FCM token on this device.',
+      );
+      return null;
+    }
+
+    return value;
+  } catch (e) {
+    const raw =
+      e instanceof Error ? e.message : typeof e === 'string' ? e : '';
+    setLastPushDeliveryError(
+      raw
+        ? `Native FCM token failed: ${raw}`
+        : 'Could not get a native FCM token on this device.',
+    );
+    return null;
+  }
+}
+
 export type ChatPushDiagnosis = {
   permission: 'granted' | 'denied' | 'undetermined' | 'unknown';
   hasNativeToken: boolean;

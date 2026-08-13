@@ -72,8 +72,13 @@ type UserDoc = {
   email: string;
   name: string;
   localAuthId: string;
-  /** Expo push tokens for this chat user (multi-device). */
+
+  /** Native Android FCM registration tokens. */
+  fcmTokens?: string[];
+
+  /** Kept temporarily for iOS/legacy Expo registrations. */
   expoPushTokens?: string[];
+
   updatedAt?: unknown;
 };
 
@@ -310,75 +315,89 @@ export async function clearChatSession(): Promise<void> {
   }
 }
 
-/** Persist this device's Expo push token on the signed-in chat profile. */
+/** Register this Android device's native FCM token. */
 export async function registerChatPushForCurrentUser(
   knownToken?: string | null,
 ): Promise<boolean> {
   if (!isChatApiConfigured()) return false;
+
   try {
     const uid = await requireUid();
     const auth = getFirebaseAuth();
-    const { registerChatPushToken, ensureChatNotificationHandler } =
-      await import('./chatNotifications');
+
+    const {
+      getCurrentNativeFcmToken,
+      ensureChatNotificationHandler,
+    } = await import('./chatNotifications');
+
     ensureChatNotificationHandler();
-    // Prefer a token we already fetched — avoid concurrent Expo token
-    // requests that can time out or leave Firestore empty.
+
     const provided = String(knownToken || '').trim();
-    const token = provided || (await registerChatPushToken());
+
+    const token =
+      provided || (await getCurrentNativeFcmToken());
+
     if (!token) return false;
 
     const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
     const snap = await getDoc(userRef);
-    const existingDoc = snap.exists() ? (snap.data() as UserDoc) : null;
-    const existing = existingDoc?.expoPushTokens || [];
-    const next = Array.from(new Set([token, ...existing])).slice(
-      0,
-      MAX_PUSH_TOKENS,
-    );
+
+    const existingDoc = snap.exists()
+      ? (snap.data() as UserDoc)
+      : null;
+
+    const existing = existingDoc?.fcmTokens || [];
+
+    const next = Array.from(
+      new Set([token, ...existing]),
+    ).slice(0, MAX_PUSH_TOKENS);
+
     const email =
       existingDoc?.email ||
       auth.currentUser?.email ||
       '';
+
     const name =
       existingDoc?.name ||
       auth.currentUser?.displayName ||
       email ||
       'Student';
 
-    if (
-      next.length === existing.length &&
-      next.every((t, i) => t === existing[i])
-    ) {
-      return true;
-    }
-    // Include email/name so Firestore rules that require those fields still pass
-    // even if the profile doc was partial.
     await setDoc(
       userRef,
       {
-        email: String(email || 'unknown@studybuddy.local'),
+        email: String(
+          email || 'unknown@studybuddy.local',
+        ),
         name: String(name || 'Student'),
         localAuthId:
           existingDoc?.localAuthId ||
           auth.currentUser?.uid ||
           uid,
-        expoPushTokens: next,
+
+        fcmTokens: next,
+
         updatedAt: serverTimestamp(),
       },
       { merge: true },
     );
+
     return true;
   } catch (e) {
     try {
-      const { reportChatPushDeliveryError } = await import('./chatNotifications');
+      const {
+        reportChatPushDeliveryError,
+      } = await import('./chatNotifications');
+
       reportChatPushDeliveryError(
         e instanceof Error
-          ? `Could not save push token to Firestore: ${e.message}`
-          : 'Could not save push token to Firestore.',
+          ? `Could not save FCM token: ${e.message}`
+          : 'Could not save FCM token.',
       );
     } catch {
       // ignore
     }
+
     return false;
   }
 }

@@ -236,6 +236,169 @@ function explainExpoPushError(err: unknown): string {
   return 'Expo push token failed.';
 }
 
+/**
+ * Temporary deep diagnostic: tests FCM device token and Expo push token
+ * separately so we can see the real Android/Expo error (not a generic timeout).
+ * Does not replace the normal registration path.
+ */
+export async function diagnosePushNotifications(): Promise<
+  Record<string, unknown>
+> {
+  const results: Record<string, unknown> = {};
+
+  try {
+    results.platform = {
+      os: Platform.OS,
+      version: Platform.Version,
+    };
+  } catch (error) {
+    results.platform = {
+      error: String(error),
+    };
+  }
+
+  try {
+    const permissions = await Notifications.getPermissionsAsync();
+
+    results.permissions = {
+      status: permissions.status,
+      granted: permissions.granted,
+      canAskAgain: permissions.canAskAgain,
+    };
+  } catch (error) {
+    results.permissions = {
+      error: String(error),
+    };
+  }
+
+  try {
+    const deviceToken = await Notifications.getDevicePushTokenAsync();
+
+    results.fcm = {
+      success: true,
+      type: deviceToken.type,
+      tokenLength: deviceToken.data?.length ?? 0,
+      tokenPreview: deviceToken.data
+        ? `${String(deviceToken.data).substring(0, 8)}...`
+        : '',
+    };
+  } catch (error: unknown) {
+    const err = error as {
+      name?: string;
+      message?: string;
+      code?: string;
+      stack?: string;
+    };
+    results.fcm = {
+      success: false,
+      name: err?.name,
+      message: err?.message,
+      code: err?.code,
+      stack: err?.stack,
+    };
+  }
+
+  try {
+    const projectId = easProjectId();
+
+    results.expoProject = {
+      projectId: projectId || null,
+    };
+
+    if (!projectId) {
+      throw new Error('Expo project ID is missing');
+    }
+
+    const expoToken = await Notifications.getExpoPushTokenAsync({
+      projectId,
+    });
+
+    results.expo = {
+      success: true,
+      tokenLength: expoToken.data?.length ?? 0,
+      tokenPreview: expoToken.data
+        ? `${String(expoToken.data).substring(0, 20)}...`
+        : '',
+    };
+  } catch (error: unknown) {
+    const err = error as {
+      name?: string;
+      message?: string;
+      code?: string;
+      stack?: string;
+    };
+    results.expo = {
+      success: false,
+      name: err?.name,
+      message: err?.message,
+      code: err?.code,
+      stack: err?.stack,
+    };
+  }
+
+  return results;
+}
+
+/** Short human summary of diagnosePushNotifications() for toasts / push panel. */
+export function summarizePushDiagnostic(
+  results: Record<string, unknown>,
+): string {
+  const lines: string[] = [];
+
+  const permissions = results.permissions as
+    | { status?: string; granted?: boolean; error?: string }
+    | undefined;
+  if (permissions?.error) {
+    lines.push(`Permissions ❌ ${permissions.error}`);
+  } else if (permissions) {
+    lines.push(
+      `Permissions ${permissions.granted || permissions.status === 'granted' ? '✅' : '❌'} ${permissions.status ?? ''}`,
+    );
+  }
+
+  const expoProject = results.expoProject as
+    | { projectId?: string | null }
+    | undefined;
+  lines.push(
+    `Project ID ${expoProject?.projectId ? '✅' : '❌'} ${expoProject?.projectId ? String(expoProject.projectId).slice(0, 8) + '…' : 'missing'}`,
+  );
+
+  const fcm = results.fcm as
+    | {
+        success?: boolean;
+        type?: string;
+        message?: string;
+        name?: string;
+        code?: string;
+      }
+    | undefined;
+  if (fcm?.success) {
+    lines.push(`FCM token ✅ ${fcm.type ?? 'ok'}`);
+  } else {
+    lines.push(
+      `FCM token ❌ ${[fcm?.name, fcm?.code, fcm?.message].filter(Boolean).join(': ') || 'failed'}`,
+    );
+  }
+
+  const expo = results.expo as
+    | {
+        success?: boolean;
+        message?: string;
+        name?: string;
+        code?: string;
+      }
+    | undefined;
+  if (expo?.success) {
+    lines.push('Expo token ✅');
+  } else {
+    lines.push(
+      `Expo token ❌ ${[expo?.name, expo?.code, expo?.message].filter(Boolean).join(': ') || 'failed'}`,
+    );
+  }
+
+  return lines.join('\n');
+}
+
 /** Inspect whether this install can receive closed-app Expo→FCM pushes. */
 export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
   const isExpoGo = Constants.appOwnership === 'expo';

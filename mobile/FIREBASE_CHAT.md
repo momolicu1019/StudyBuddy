@@ -39,6 +39,8 @@ Also add a composite-friendly query note: conversations are queried with
 
 `memberIds` **array-contains** current uid — no extra index is usually required for that single-field query.
 
+The mobile app initializes Firestore with **long-polling** (`experimentalForceLongPolling`) so live listeners work reliably in Expo / React Native. Without that, receivers often only see new messages after reopening a chat.
+
 ## 4. Point the mobile app
 
 After `.env` is filled, open **Messages** while signed in with Google or email. The first open creates the Firebase chat profile. Classmates must open Messages once before you can DM their email.

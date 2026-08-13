@@ -417,6 +417,45 @@ export async function listConversations(): Promise<ChatConversation[]> {
   }
 }
 
+/** Live conversation list (previews + unread) for the signed-in chat user. */
+export function subscribeConversations(
+  onChange: (conversations: ChatConversation[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  const auth = getFirebaseAuth();
+  const uid = auth.currentUser?.uid;
+  if (!uid) {
+    onChange([]);
+    return () => undefined;
+  }
+
+  const db = getFirestoreDb();
+  const q = query(
+    collection(db, 'chatConversations'),
+    where('memberIds', 'array-contains', uid),
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const rows: ChatConversation[] = [];
+      for (const docSnap of snap.docs) {
+        const mapped = mapConversation(
+          { id: docSnap.id, data: () => docSnap.data() as ConversationDoc },
+          uid,
+        );
+        if (mapped) rows.push(mapped);
+      }
+      rows.sort((a, b) => {
+        const at = a.last_message_at || '';
+        const bt = b.last_message_at || '';
+        return bt.localeCompare(at);
+      });
+      onChange(rows);
+    },
+    (err) => onError?.(mapChatError(err, 'Could not sync conversations')),
+  );
+}
+
 export async function openDm(peerEmailRaw: string): Promise<ChatConversation> {
   try {
     const uid = await requireUid();
@@ -690,6 +729,9 @@ export async function sendMessage(
     const messageRef = doc(
       collection(db, 'chatConversations', conversationId, 'messages'),
     );
+    // Client timestamp so the sender UI can show the message immediately and
+    // remote listeners receive a concrete createdAt (serverTimestamp is null
+    // until the write resolves, which can delay remote ordering).
     const createdAt = Timestamp.now();
     const batch = writeBatch(db);
     batch.set(messageRef, {
@@ -719,6 +761,20 @@ export async function sendMessage(
     };
   } catch (err) {
     throw mapChatError(err, 'Could not send message');
+  }
+}
+
+/** Clear unread for the current user while a thread is open. */
+export async function markConversationRead(
+  conversationId: string,
+): Promise<void> {
+  try {
+    const uid = await requireUid();
+    await updateDoc(doc(getFirestoreDb(), 'chatConversations', conversationId), {
+      [`unread.${uid}`]: 0,
+    });
+  } catch {
+    // ignore transient unread resets
   }
 }
 
@@ -814,7 +870,7 @@ export function subscribeMessages(
       });
       emit();
     },
-    (err) => onError?.(err),
+    (err) => onError?.(mapChatError(err, 'Could not sync messages')),
   );
 
   return () => {

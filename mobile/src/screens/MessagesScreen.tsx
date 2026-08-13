@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -15,8 +15,8 @@ import {
   createGroupChat,
   ensureChatSession,
   isChatApiConfigured,
-  listConversations,
   openDm,
+  subscribeConversations,
   type ChatConversation,
 } from '../api/chatApi';
 import { AppModal, PrimaryButton } from '../components/ui';
@@ -54,47 +54,80 @@ export function MessagesScreen({ navigation }: Props) {
   const [groupEmailDraft, setGroupEmailDraft] = useState('');
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
 
   const canChat = isSignedIn && !skippedLogin && Boolean(session?.user);
 
-  const bootstrap = useCallback(async () => {
+  // Ensure chat auth, then keep the inbox in sync with Firestore.
+  useEffect(() => {
     if (!canChat || !session?.user) {
       setLoading(false);
+      setRefreshing(false);
+      setConversations([]);
       setError('Sign in with Google or email to message other students.');
       return;
     }
     if (!isChatApiConfigured()) {
       setLoading(false);
+      setRefreshing(false);
+      setConversations([]);
       setError(
         'Firebase chat is not configured. Add EXPO_PUBLIC_FIREBASE_* to mobile/.env (see FIREBASE_CHAT.md).',
       );
       return;
     }
 
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
     setError(null);
-    try {
-      await ensureChatSession({
-        id: session.user.id,
-        email: session.user.email,
-        name: session.user.name,
-      });
-      const rows = await listConversations();
-      setConversations(rows);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load messages');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [canChat, session]);
+    setLoading(true);
 
-  useEffect(() => {
-    void bootstrap();
-  }, [bootstrap]);
+    void (async () => {
+      try {
+        await ensureChatSession({
+          id: session.user.id,
+          email: session.user.email,
+          name: session.user.name,
+        });
+        if (cancelled) return;
+        unsub = subscribeConversations(
+          (rows) => {
+            if (cancelled) return;
+            setConversations(rows);
+            setError(null);
+            setLoading(false);
+            setRefreshing(false);
+          },
+          (err) => {
+            if (cancelled) return;
+            setError(err.message);
+            setLoading(false);
+            setRefreshing(false);
+          },
+        );
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : 'Could not load messages');
+        setLoading(false);
+        setRefreshing(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [
+    canChat,
+    session?.user?.id,
+    session?.user?.email,
+    session?.user?.name,
+    retryToken,
+  ]);
 
   const onRefresh = () => {
     setRefreshing(true);
-    void bootstrap();
+    setRetryToken((n) => n + 1);
   };
 
   const resetCompose = () => {
@@ -149,7 +182,6 @@ export function MessagesScreen({ navigation }: Props) {
       const conv = await openDm(email);
       closeCompose();
       openThread(navigation, conv);
-      void bootstrap();
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Could not start chat');
     } finally {
@@ -174,7 +206,6 @@ export function MessagesScreen({ navigation }: Props) {
       });
       closeCompose();
       openThread(navigation, conv);
-      void bootstrap();
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Could not create group');
     } finally {
@@ -197,7 +228,13 @@ export function MessagesScreen({ navigation }: Props) {
         <Text style={styles.errorTitle}>Messages</Text>
         <Text style={styles.errorBody}>{error}</Text>
         {canChat && isChatApiConfigured() ? (
-          <PrimaryButton label="Try again" onPress={() => void bootstrap()} />
+          <PrimaryButton
+            label="Try again"
+            onPress={() => {
+              setLoading(true);
+              setRetryToken((n) => n + 1);
+            }}
+          />
         ) : null}
       </View>
     );

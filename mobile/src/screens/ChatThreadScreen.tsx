@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -13,11 +13,12 @@ import {
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useHeaderHeight } from '@react-navigation/elements';
+import { useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   ensureChatSession,
-  listMessages,
+  markConversationRead,
   sendMessage,
   subscribeMessages,
   type ChatMessage,
@@ -35,7 +36,11 @@ export function ChatThreadScreen({ route }: Props) {
   const { showToast } = useApp();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
+  const isFocused = useIsFocused();
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const lastCountRef = useRef(0);
+  const focusedRef = useRef(isFocused);
+  focusedRef.current = isFocused;
 
   const [myId, setMyId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -45,28 +50,68 @@ export function ChatThreadScreen({ route }: Props) {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-  const loadInitial = useCallback(async () => {
+  // Auth + live message listener — updates as soon as the peer sends.
+  useEffect(() => {
     if (!session?.user) return;
-    try {
-      const me = await ensureChatSession({
-        id: session.user.id,
-        email: session.user.email,
-        name: session.user.name,
-      });
-      setMyId(me.id);
-      // Seed once; live listener keeps the thread updated.
-      const rows = await listMessages(conversationId, { limit: 100 });
-      setMessages(rows);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Could not load chat');
-    } finally {
-      setLoading(false);
-    }
-  }, [conversationId, session, showToast]);
+
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const me = await ensureChatSession({
+          id: session.user.id,
+          email: session.user.email,
+          name: session.user.name,
+        });
+        if (cancelled) return;
+        setMyId(me.id);
+        unsub = subscribeMessages(
+          conversationId,
+          (rows) => {
+            if (cancelled) return;
+            setMessages(rows);
+            setLoading(false);
+            if (rows.length > lastCountRef.current) {
+              requestAnimationFrame(() => {
+                listRef.current?.scrollToEnd({ animated: true });
+              });
+            }
+            lastCountRef.current = rows.length;
+            if (focusedRef.current) {
+              void markConversationRead(conversationId);
+            }
+          },
+          (err) => {
+            if (cancelled) return;
+            setLoading(false);
+            showToast(err.message || 'Could not sync chat');
+          },
+        );
+      } catch (e) {
+        if (cancelled) return;
+        setLoading(false);
+        showToast(e instanceof Error ? e.message : 'Could not load chat');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [
+    conversationId,
+    session?.user?.id,
+    session?.user?.email,
+    session?.user?.name,
+    showToast,
+  ]);
 
   useEffect(() => {
-    void loadInitial();
-  }, [loadInitial]);
+    if (isFocused) {
+      void markConversationRead(conversationId);
+    }
+  }, [conversationId, isFocused]);
 
   // Keep composer above the software keyboard on iOS and Android.
   useEffect(() => {
@@ -90,19 +135,6 @@ export function ChatThreadScreen({ route }: Props) {
       hideSub.remove();
     };
   }, []);
-
-  // Realtime Firestore subscription while this thread is open.
-  useEffect(() => {
-    if (!myId) return;
-    const unsub = subscribeMessages(
-      conversationId,
-      (rows) => setMessages(rows),
-      () => {
-        // Ignore transient listener errors; pull-to-refresh path still works via remount.
-      },
-    );
-    return () => unsub();
-  }, [conversationId, myId]);
 
   const onSend = async () => {
     const body = input.trim();

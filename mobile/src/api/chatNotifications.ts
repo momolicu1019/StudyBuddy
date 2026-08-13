@@ -186,9 +186,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `${label} timed out after ${Math.round(ms / 1000)}s (Google Play Services may be stuck).`,
+            ),
+          );
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function explainNativePushError(err: unknown): string {
   const raw =
     err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (/timed out|TIMEOUT/i.test(raw)) {
+    return (
+      'Google Play Services is taking too long to give an FCM token. ' +
+      'Check internet, update Play Services, sign into a Google account, ' +
+      'set automatic date & time, wait a minute, then tap Test again.'
+    );
+  }
   if (/SERVICE_NOT_AVAILABLE/i.test(raw)) {
     return (
       'Google Play Services could not reach FCM (SERVICE_NOT_AVAILABLE). ' +
@@ -202,7 +233,7 @@ function explainNativePushError(err: unknown): string {
       'Google Play Services is missing or disabled on this phone — FCM push cannot work here.'
     );
   }
-  if (/TIMEOUT|NETWORK|UNAVAILABLE/i.test(raw)) {
+  if (/NETWORK|UNAVAILABLE/i.test(raw)) {
     return (
       'Network error while fetching the FCM token. Switch Wi‑Fi/mobile data and retry.'
     );
@@ -211,16 +242,42 @@ function explainNativePushError(err: unknown): string {
   return 'FCM device token failed — google-services.json may be missing from this APK.';
 }
 
+function explainExpoPushError(err: unknown): string {
+  const raw =
+    err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (/UnknownHostException|Unable to resolve host|exp\.host/i.test(raw)) {
+    return (
+      'This phone cannot reach Expo (DNS failed for exp.host). ' +
+      'Switch Wi‑Fi ↔ mobile data, turn off VPN/Private DNS (or set Private DNS to Automatic), ' +
+      'forget/rejoin Wi‑Fi, then tap Test again. Without reaching exp.host, closed-app push cannot register.'
+    );
+  }
+  if (/timed out|TIMEOUT/i.test(raw)) {
+    return explainNativePushError(err);
+  }
+  if (/NETWORK|UNAVAILABLE|Failed to connect|ECONNREFUSED|ENOTFOUND/i.test(raw)) {
+    return (
+      'Network error talking to Expo push servers. Switch networks and retry Test push.'
+    );
+  }
+  if (raw) return `Expo push token failed: ${raw}`;
+  return 'Expo push token failed.';
+}
+
 /**
- * Native FCM/APNs token. Retries SERVICE_NOT_AVAILABLE — it is often transient
- * right after install / Play Services wake-up.
+ * Native FCM/APNs token. Short retries + per-attempt timeout so Test push
+ * cannot hang forever on SERVICE_NOT_AVAILABLE / Play Services stalls.
  */
 async function fetchNativeDevicePushToken(): Promise<string> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      if (attempt > 0) await sleep(700 * attempt);
-      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      if (attempt > 0) await sleep(900);
+      const deviceToken = await withTimeout(
+        Notifications.getDevicePushTokenAsync(),
+        10_000,
+        'FCM device token',
+      );
       const native = String(
         typeof deviceToken === 'string'
           ? deviceToken
@@ -231,8 +288,8 @@ async function fetchNativeDevicePushToken(): Promise<string> {
     } catch (e) {
       lastError = e;
       const msg = e instanceof Error ? e.message : String(e);
-      // Only retry the common transient Play Services race.
-      if (!/SERVICE_NOT_AVAILABLE/i.test(msg)) break;
+      // Retry only transient Play Services races / timeouts.
+      if (!/SERVICE_NOT_AVAILABLE|timed out/i.test(msg)) break;
     }
   }
   throw lastError instanceof Error
@@ -308,7 +365,11 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
     }
 
     try {
-      const token = await Notifications.getExpoPushTokenAsync({ projectId });
+      const token = await withTimeout(
+        Notifications.getExpoPushTokenAsync({ projectId }),
+        12_000,
+        'Expo push token',
+      );
       const expoToken = String(token.data || '').trim() || null;
       return {
         permission,
@@ -325,10 +386,7 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
         hasNativeToken,
         expoToken: null,
         isExpoGo: false,
-        error:
-          e instanceof Error
-            ? `Expo push token failed: ${e.message}`
-            : 'Expo push token failed.',
+        error: explainExpoPushError(e),
       };
     }
   } catch (e) {
@@ -411,12 +469,10 @@ export async function registerChatPushToken(): Promise<string | null> {
       return null;
     }
     return value;
-  } catch {
-    // Simulator / Expo Go / missing credentials — chat still works without push.
+  } catch (e) {
+    // Simulator / Expo Go / missing credentials / network — chat still works.
     // Local Firestore-driven banners still notify when the app process is alive.
-    setLastPushDeliveryError(
-      'Push registration failed — closed-app chat alerts may not work on this install.',
-    );
+    setLastPushDeliveryError(explainExpoPushError(e));
     return null;
   }
 }

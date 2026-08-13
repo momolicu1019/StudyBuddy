@@ -18,6 +18,7 @@ import {
   ensureChatSession,
   listMessages,
   sendMessage,
+  subscribeMessages,
   type ChatMessage,
 } from '../api/chatApi';
 import { useApp } from '../context/AppContext';
@@ -26,8 +27,6 @@ import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChatThread'>;
-
-const POLL_MS = 3000;
 
 export function ChatThreadScreen({ route }: Props) {
   const { conversationId, peerName } = route.params;
@@ -42,8 +41,6 @@ export function ChatThreadScreen({ route }: Props) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const messagesRef = useRef<ChatMessage[]>([]);
-  messagesRef.current = messages;
 
   const loadInitial = useCallback(async () => {
     if (!session?.user) return;
@@ -54,6 +51,7 @@ export function ChatThreadScreen({ route }: Props) {
         name: session.user.name,
       });
       setMyId(me.id);
+      // Seed once; live listener keeps the thread updated.
       const rows = await listMessages(conversationId, { limit: 100 });
       setMessages(rows);
     } catch (e) {
@@ -67,36 +65,18 @@ export function ChatThreadScreen({ route }: Props) {
     void loadInitial();
   }, [loadInitial]);
 
-  // Poll for new messages while this thread is open.
+  // Realtime Firestore subscription while this thread is open.
   useEffect(() => {
-    const timer = setInterval(() => {
-      void (async () => {
-        try {
-          const current = messagesRef.current;
-          const lastId = current[current.length - 1]?.id;
-          if (!lastId) {
-            const rows = await listMessages(conversationId, { limit: 100 });
-            if (rows.length) setMessages(rows);
-            return;
-          }
-          const newer = await listMessages(conversationId, { afterId: lastId });
-          if (newer.length) {
-            setMessages((prev) => {
-              const seen = new Set(prev.map((m) => m.id));
-              const merged = [...prev];
-              for (const m of newer) {
-                if (!seen.has(m.id)) merged.push(m);
-              }
-              return merged;
-            });
-          }
-        } catch {
-          // Ignore transient poll errors.
-        }
-      })();
-    }, POLL_MS);
-    return () => clearInterval(timer);
-  }, [conversationId]);
+    if (!myId) return;
+    const unsub = subscribeMessages(
+      conversationId,
+      (rows) => setMessages(rows),
+      () => {
+        // Ignore transient listener errors; pull-to-refresh path still works via remount.
+      },
+    );
+    return () => unsub();
+  }, [conversationId, myId]);
 
   const onSend = async () => {
     const body = input.trim();

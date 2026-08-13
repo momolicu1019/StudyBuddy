@@ -19,11 +19,11 @@ This FastAPI project is the **optional cloud** layer for later:
 | Account | Sign-in / profile |
 | Sync | Keep devices consistent |
 | Devices | Multi-device management |
-| **Chat** | Student 1:1 DMs (`/api/chat/*`) on Neon Postgres |
+| **Chat (legacy)** | Optional FastAPI `/api/chat/*` on Neon Postgres |
 
-You do **not** need to run this server for normal study features. **Student chat** does require this API + a Postgres database (Neon works well).
+You do **not** need to run this server for normal study features. **Student chat in the mobile app now uses Firebase** (see `mobile/FIREBASE_CHAT.md`). The FastAPI chat routes below remain available if you still want a self-hosted API.
 
-### Student chat (REST MVP)
+### Student chat REST MVP (optional / legacy)
 
 1. Copy `.env.example` → `.env` and set:
 
@@ -38,8 +38,6 @@ CHAT_JWT_SECRET=a-long-random-secret
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-
-3. Point the mobile app at the API with `EXPO_PUBLIC_CHAT_API_URL` (see `mobile/.env.example`).
 
 Chat endpoints: `POST /api/chat/auth/upsert`, `POST /api/chat/dms`, `GET /api/chat/conversations`, `GET|POST /api/chat/conversations/{id}/messages`.
 

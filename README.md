@@ -36,7 +36,7 @@ On-device code lives in `mobile/src/storage/`. Sign in is optional via the login
 - Flashcard study mode
 - Quiz mode with scoring
 - AI Tutor chat (on-device helpers)
-- **Student Messages** — 1:1 DMs via optional FastAPI + Neon Postgres (chat icon next to profile)
+- **Student Messages** — 1:1 DMs via Firebase Auth + Cloud Firestore (chat icon next to profile)
 - Pomodoro focus timer
 - Study progress stats
 
@@ -132,6 +132,13 @@ The app starts **empty** and stores data on the device. Typical study flow:
 
 See [backend/README.md](backend/README.md) if you want to run the FastAPI service for future sync/backup work.
 
+### Student chat (Firebase)
+
+Messages use **Firebase**, not the FastAPI server. Setup guide: [mobile/FIREBASE_CHAT.md](mobile/FIREBASE_CHAT.md).
+
+Copy your Firebase web config into `mobile/.env` as `EXPO_PUBLIC_FIREBASE_*`, enable Email/Password + Anonymous auth, create Firestore, and publish `mobile/firestore.rules`.
+
+
 ### CI builds (Android APK + iOS IPA)
 
 Pushing changes under `mobile/` (or this workflow file) to `main` builds **Android and iOS** automatically, waits for EAS to finish, then publishes:
@@ -152,7 +159,7 @@ npx eas-cli device:create
 npx eas-cli build --platform ios --profile preview
 ```
 
-4. Set `EXPO_PUBLIC_GOOGLE_*` / AI env vars in the Expo project environments (`preview` / `production`) so CI builds pick them up (local `mobile/.env` is not used by GitHub Actions).
+4. Set `EXPO_PUBLIC_GOOGLE_*` / `EXPO_PUBLIC_FIREBASE_*` / AI env vars in the Expo project environments (`preview` / `production`) so CI builds pick them up (local `mobile/.env` is not used by GitHub Actions).
 
 Release page: **GitHub → Releases → studybuddy_v1.0.1**. Bump `expo.version` in `mobile/app.json` when you want the next tag, etc.
 

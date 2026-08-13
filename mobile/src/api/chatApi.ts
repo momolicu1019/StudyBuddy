@@ -321,8 +321,8 @@ export async function registerChatPushForCurrentUser(
     const { registerChatPushToken, ensureChatNotificationHandler } =
       await import('./chatNotifications');
     ensureChatNotificationHandler();
-    // Prefer a token we already fetched — Play Services often flakes on a
-    // second getDevicePushTokenAsync call and would leave Firestore empty.
+    // Prefer a token we already fetched — avoid concurrent Expo token
+    // requests that can time out or leave Firestore empty.
     const provided = String(knownToken || '').trim();
     const token = provided || (await registerChatPushToken());
     if (!token) return false;

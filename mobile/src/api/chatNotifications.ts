@@ -187,10 +187,6 @@ export type ChatPushDiagnosis = {
   error: string | null;
 };
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -204,7 +200,7 @@ async function withTimeout<T>(
         timer = setTimeout(() => {
           reject(
             new Error(
-              `${label} timed out after ${Math.round(ms / 1000)}s (Google Play Services may be stuck).`,
+              `${label} timed out after ${Math.round(ms / 1000)}s.`,
             ),
           );
         }, ms);
@@ -213,38 +209,6 @@ async function withTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-function explainNativePushError(err: unknown): string {
-  const raw =
-    err instanceof Error ? err.message : typeof err === 'string' ? err : '';
-  if (/timed out|TIMEOUT/i.test(raw)) {
-    return (
-      'Google Play Services is taking too long to give an FCM token. ' +
-      'Check internet, update Play Services, sign into a Google account, ' +
-      'set automatic date & time, wait a minute, then tap Test again.'
-    );
-  }
-  if (/SERVICE_NOT_AVAILABLE/i.test(raw)) {
-    return (
-      'Google Play Services could not reach FCM (SERVICE_NOT_AVAILABLE). ' +
-      'Check internet, update Google Play Services, sign into a Google account on this phone, ' +
-      'set the clock to automatic, then reopen StudyBuddy and tap Test again. ' +
-      'Avoid Force stop — it can block FCM until the next open.'
-    );
-  }
-  if (/SERVICE_MISSING|SERVICE_DISABLED|SERVICE_INVALID/i.test(raw)) {
-    return (
-      'Google Play Services is missing or disabled on this phone — FCM push cannot work here.'
-    );
-  }
-  if (/NETWORK|UNAVAILABLE/i.test(raw)) {
-    return (
-      'Network error while fetching the FCM token. Switch Wi‑Fi/mobile data and retry.'
-    );
-  }
-  if (raw) return `FCM device token failed: ${raw}`;
-  return 'FCM device token failed — google-services.json may be missing from this APK.';
 }
 
 function explainExpoPushError(err: unknown): string {
@@ -258,7 +222,10 @@ function explainExpoPushError(err: unknown): string {
     );
   }
   if (/timed out|TIMEOUT/i.test(raw)) {
-    return explainNativePushError(err);
+    return (
+      'Expo push token timed out. Check internet, Google Play Services, ' +
+      'notification permission, and that this APK includes google-services.json, then tap Test again.'
+    );
   }
   if (/NETWORK|UNAVAILABLE|Failed to connect|ECONNREFUSED|ENOTFOUND/i.test(raw)) {
     return (
@@ -269,42 +236,10 @@ function explainExpoPushError(err: unknown): string {
   return 'Expo push token failed.';
 }
 
-/**
- * Native FCM/APNs token. Short retries + per-attempt timeout so Test push
- * cannot hang forever on SERVICE_NOT_AVAILABLE / Play Services stalls.
- */
-async function fetchNativeDevicePushToken(): Promise<string> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      if (attempt > 0) await sleep(900);
-      const deviceToken = await withTimeout(
-        Notifications.getDevicePushTokenAsync(),
-        10_000,
-        'FCM device token',
-      );
-      const native = String(
-        typeof deviceToken === 'string'
-          ? deviceToken
-          : (deviceToken as { data?: string })?.data || '',
-      ).trim();
-      if (native) return native;
-      lastError = new Error('Empty native push token');
-    } catch (e) {
-      lastError = e;
-      const msg = e instanceof Error ? e.message : String(e);
-      // Retry only transient Play Services races / timeouts.
-      if (!/SERVICE_NOT_AVAILABLE|timed out/i.test(msg)) break;
-    }
-  }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(String(lastError || 'Native push token failed'));
-}
-
 /** Inspect whether this install can receive closed-app Expo→FCM pushes. */
 export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
   const isExpoGo = Constants.appOwnership === 'expo';
+
   if (!canUsePush()) {
     return {
       permission: 'unknown',
@@ -314,19 +249,23 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
       error: 'Push is only available on iOS/Android builds.',
     };
   }
+
   if (isExpoGo) {
     return {
       permission: 'unknown',
       hasNativeToken: false,
       expoToken: null,
       isExpoGo: true,
-      error: 'Expo Go cannot deliver closed-app chat push. Install the StudyBuddy APK.',
+      error:
+        'Expo Go cannot deliver closed-app chat push. Install the StudyBuddy APK.',
     };
   }
 
   try {
     await ensureNotificationChannels();
+
     const current = await Notifications.getPermissionsAsync();
+
     const permission =
       current.status === 'granted' ||
       current.status === 'denied' ||
@@ -344,25 +283,12 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
       };
     }
 
-    let hasNativeToken = false;
-    try {
-      const native = await fetchNativeDevicePushToken();
-      hasNativeToken = Boolean(native);
-    } catch (e) {
-      return {
-        permission,
-        hasNativeToken: false,
-        expoToken: null,
-        isExpoGo: false,
-        error: explainNativePushError(e),
-      };
-    }
-
     const projectId = easProjectId();
+
     if (!projectId) {
       return {
         permission,
-        hasNativeToken,
+        hasNativeToken: false,
         expoToken: null,
         isExpoGo: false,
         error: 'Missing EAS projectId.',
@@ -370,15 +296,19 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
     }
 
     try {
+      // Use Expo Push Service directly.
+      // Do not call getDevicePushTokenAsync() first.
       const token = await withTimeout(
         Notifications.getExpoPushTokenAsync({ projectId }),
-        12_000,
+        20_000,
         'Expo push token',
       );
+
       const expoToken = String(token.data || '').trim() || null;
+
       return {
         permission,
-        hasNativeToken,
+        hasNativeToken: Boolean(expoToken),
         expoToken,
         isExpoGo: false,
         error: expoToken
@@ -388,7 +318,7 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
     } catch (e) {
       return {
         permission,
-        hasNativeToken,
+        hasNativeToken: false,
         expoToken: null,
         isExpoGo: false,
         error: explainExpoPushError(e),
@@ -400,44 +330,63 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
       hasNativeToken: false,
       expoToken: null,
       isExpoGo: false,
-      error: e instanceof Error ? e.message : 'Push diagnosis failed.',
+      error:
+        e instanceof Error ? e.message : 'Push diagnosis failed.',
     };
   }
 }
 
 /**
  * Send a remote Expo push to THIS device (verifies FCM credentials end-to-end).
- * Use while signed in; then force-close and ask a classmate to message you.
+ * Prefer passing a known Expo token so we do not request another one.
  */
-export async function sendSelfTestChatPush(): Promise<PushSendResult> {
-  const diagnosis = await diagnoseChatPush();
-  if (!diagnosis.expoToken) {
-    const deliveryError =
-      diagnosis.error || 'No Expo push token on this device.';
-    setLastPushDeliveryError(deliveryError);
-    return { badTokens: [], deliveryError, accepted: 0 };
+export async function sendSelfTestChatPush(
+  knownToken?: string | null,
+): Promise<PushSendResult> {
+  let expoToken = String(knownToken || '').trim();
+
+  if (!expoToken) {
+    const diagnosis = await diagnoseChatPush();
+
+    if (!diagnosis.expoToken) {
+      const deliveryError =
+        diagnosis.error || 'No Expo push token on this device.';
+
+      setLastPushDeliveryError(deliveryError);
+
+      return {
+        badTokens: [],
+        deliveryError,
+        accepted: 0,
+      };
+    }
+
+    expoToken = diagnosis.expoToken;
   }
 
-  // Persist the token we already have — do not re-fetch FCM (often flakes and
-  // leaves chatUsers.expoPushTokens empty even after Ready).
   try {
-    const { registerChatPushForCurrentUser } = await import('./chatApi');
-    const saved = await registerChatPushForCurrentUser(diagnosis.expoToken);
+    const { registerChatPushForCurrentUser } =
+      await import('./chatApi');
+
+    const saved =
+      await registerChatPushForCurrentUser(expoToken);
+
     if (!saved) {
       const deliveryError =
         consumeLastPushDeliveryError() ||
-        'Got a push token but could not save it to Firestore (expoPushTokens is empty).';
+        'Got a push token but could not save it to Firestore.';
+
       setLastPushDeliveryError(deliveryError);
-      // Still try the local self-test send with the in-memory token.
     }
   } catch {
-    // still attempt the self-test send
+    // Still attempt the self-test using the token we already have.
   }
 
   return sendChatPushNotifications({
-    tokens: [diagnosis.expoToken],
+    tokens: [expoToken],
     title: 'StudyBuddy push test',
-    body: 'If you see this, Expo→FCM works. Force-close the app, then have a classmate message you.',
+    body:
+      'If you see this, Expo→FCM works. Force-close the app, then have a classmate message you.',
     data: {
       type: DATA_TYPE,
       conversationId: 'push-self-test',
@@ -451,8 +400,10 @@ export async function sendSelfTestChatPush(): Promise<PushSendResult> {
 /** Register for remote push and return the Expo push token (or null). */
 export async function registerChatPushToken(): Promise<string | null> {
   if (!canUsePush()) return null;
+
   try {
     const granted = await ensurePermissionsAndChannel();
+
     if (!granted) {
       setLastPushDeliveryError(
         'Notification permission is off — enable it for closed-app chat alerts.',
@@ -461,30 +412,31 @@ export async function registerChatPushToken(): Promise<string | null> {
     }
 
     const projectId = easProjectId();
+
     if (!projectId) {
-      setLastPushDeliveryError('Missing EAS projectId — cannot register push.');
+      setLastPushDeliveryError(
+        'Missing EAS projectId — cannot register push.',
+      );
       return null;
     }
 
-    // Native FCM/APNs token must exist before Expo can deliver to a killed app.
-    // If this throws, Play Services / network / google-services.json is the issue.
-    try {
-      await fetchNativeDevicePushToken();
-    } catch (e) {
-      setLastPushDeliveryError(explainNativePushError(e));
-      return null;
-    }
+    const token = await withTimeout(
+      Notifications.getExpoPushTokenAsync({ projectId }),
+      20_000,
+      'Expo push token',
+    );
 
-    const token = await Notifications.getExpoPushTokenAsync({ projectId });
     const value = String(token.data || '').trim();
+
     if (!value) {
-      setLastPushDeliveryError('Could not get an Expo push token on this device.');
+      setLastPushDeliveryError(
+        'Could not get an Expo push token on this device.',
+      );
       return null;
     }
+
     return value;
   } catch (e) {
-    // Simulator / Expo Go / missing credentials / network — chat still works.
-    // Local Firestore-driven banners still notify when the app process is alive.
     setLastPushDeliveryError(explainExpoPushError(e));
     return null;
   }

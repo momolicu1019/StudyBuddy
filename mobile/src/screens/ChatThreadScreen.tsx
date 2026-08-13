@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -29,7 +30,7 @@ import type { RootStackParamList } from '../navigation/types';
 type Props = NativeStackScreenProps<RootStackParamList, 'ChatThread'>;
 
 export function ChatThreadScreen({ route }: Props) {
-  const { conversationId, peerName } = route.params;
+  const { conversationId, peerName, isGroup } = route.params;
   const { session } = useAuth();
   const { showToast } = useApp();
   const insets = useSafeAreaInsets();
@@ -41,6 +42,8 @@ export function ChatThreadScreen({ route }: Props) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const loadInitial = useCallback(async () => {
     if (!session?.user) return;
@@ -64,6 +67,29 @@ export function ChatThreadScreen({ route }: Props) {
   useEffect(() => {
     void loadInitial();
   }, [loadInitial]);
+
+  // Keep composer above the software keyboard on iOS and Android.
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent =
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardVisible(true);
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToEnd({ animated: true });
+      });
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardVisible(false);
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Realtime Firestore subscription while this thread is open.
   useEffect(() => {
@@ -107,59 +133,94 @@ export function ChatThreadScreen({ route }: Props) {
     );
   }
 
+  // Stack screen has no tab bar; lift by full keyboard height on Android.
+  const iosOffset = headerHeight + 12;
+  const androidLift = keyboardHeight > 0 ? keyboardHeight : 0;
+
   return (
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={headerHeight}
+      keyboardVerticalOffset={iosOffset}
+      enabled={Platform.OS === 'ios'}
     >
-      <FlatList
-        ref={listRef}
-        data={messages}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-        ListEmptyComponent={
-          <Text style={styles.empty}>
-            Say hi to {peerName}. Messages sync when both of you are online.
-          </Text>
-        }
-        renderItem={({ item }) => {
-          const mine = myId != null && item.sender_id === myId;
-          return (
-            <View
-              style={[styles.bubble, mine ? styles.mine : styles.theirs]}
-            >
-              <Text style={[styles.bubbleText, mine && styles.mineText]}>
-                {item.body}
-              </Text>
-            </View>
-          );
-        }}
-      />
-
       <View
         style={[
-          styles.composer,
-          { paddingBottom: Math.max(insets.bottom, 10) },
+          styles.screen,
+          Platform.OS === 'android' && androidLift > 0
+            ? { paddingBottom: androidLift }
+            : null,
         ]}
       >
-        <TextInput
-          value={input}
-          onChangeText={setInput}
-          placeholder={`Message ${peerName}`}
-          placeholderTextColor={colors.muted}
-          style={styles.input}
-          multiline
-          maxLength={4000}
+        <FlatList
+          ref={listRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          onContentSizeChange={() =>
+            listRef.current?.scrollToEnd({ animated: false })
+          }
+          ListEmptyComponent={
+            <Text style={styles.empty}>
+              {isGroup
+                ? `Say hi to ${peerName}. Group messages sync when members are online.`
+                : `Say hi to ${peerName}. Messages sync when both of you are online.`}
+            </Text>
+          }
+          renderItem={({ item }) => {
+            const mine = myId != null && item.sender_id === myId;
+            return (
+              <View
+                style={[styles.bubble, mine ? styles.mine : styles.theirs]}
+              >
+                {isGroup && !mine && item.sender_name ? (
+                  <Text style={styles.senderName}>{item.sender_name}</Text>
+                ) : null}
+                <Text style={[styles.bubbleText, mine && styles.mineText]}>
+                  {item.body}
+                </Text>
+              </View>
+            );
+          }}
         />
-        <Pressable
-          onPress={() => void onSend()}
-          style={[styles.send, (!input.trim() || sending) && styles.sendDisabled]}
-          disabled={!input.trim() || sending}
+
+        <View
+          style={[
+            styles.composer,
+            {
+              paddingBottom: keyboardVisible
+                ? 10
+                : Math.max(insets.bottom, 10),
+            },
+          ]}
         >
-          <Text style={styles.sendText}>{sending ? '…' : 'Send'}</Text>
-        </Pressable>
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            placeholder={`Message ${peerName}`}
+            placeholderTextColor={colors.muted}
+            style={styles.input}
+            multiline
+            maxLength={4000}
+            onFocus={() => {
+              requestAnimationFrame(() => {
+                listRef.current?.scrollToEnd({ animated: true });
+              });
+            }}
+          />
+          <Pressable
+            onPress={() => void onSend()}
+            style={[
+              styles.send,
+              (!input.trim() || sending) && styles.sendDisabled,
+            ]}
+            disabled={!input.trim() || sending}
+          >
+            <Text style={styles.sendText}>{sending ? '…' : 'Send'}</Text>
+          </Pressable>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -199,6 +260,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     borderBottomLeftRadius: 4,
+  },
+  senderName: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 4,
   },
   bubbleText: { color: colors.ink, fontSize: 15, lineHeight: 21 },
   mineText: { color: '#fff' },

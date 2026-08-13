@@ -12,6 +12,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 
 import {
+  createGroupChat,
   ensureChatSession,
   isChatApiConfigured,
   listConversations,
@@ -25,6 +26,19 @@ import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Messages'>;
+type ComposeMode = 'dm' | 'group';
+
+function openThread(
+  navigation: Props['navigation'],
+  conv: ChatConversation,
+) {
+  navigation.navigate('ChatThread', {
+    conversationId: conv.id,
+    peerName: conv.title,
+    peerEmail: conv.peer.email,
+    isGroup: conv.type === 'group',
+  });
+}
 
 export function MessagesScreen({ navigation }: Props) {
   const { session, isSignedIn, skippedLogin } = useAuth();
@@ -33,7 +47,11 @@ export function MessagesScreen({ navigation }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [composeMode, setComposeMode] = useState<ComposeMode>('dm');
   const [peerEmail, setPeerEmail] = useState('');
+  const [groupTitle, setGroupTitle] = useState('');
+  const [groupEmails, setGroupEmails] = useState<string[]>([]);
+  const [groupEmailDraft, setGroupEmailDraft] = useState('');
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,6 +97,47 @@ export function MessagesScreen({ navigation }: Props) {
     void bootstrap();
   };
 
+  const resetCompose = () => {
+    setPeerEmail('');
+    setGroupTitle('');
+    setGroupEmails([]);
+    setGroupEmailDraft('');
+    setComposeMode('dm');
+  };
+
+  const closeCompose = () => {
+    setComposeOpen(false);
+    resetCompose();
+  };
+
+  const openCompose = (mode: ComposeMode) => {
+    resetCompose();
+    setComposeMode(mode);
+    setComposeOpen(true);
+  };
+
+  const addGroupEmail = () => {
+    const email = groupEmailDraft.trim().toLowerCase();
+    if (!email) {
+      showToast('Enter a friend’s email');
+      return;
+    }
+    if (groupEmails.includes(email)) {
+      showToast('That email is already on the list');
+      return;
+    }
+    if (session?.user?.email && email === session.user.email.toLowerCase()) {
+      showToast('You are already in the group');
+      return;
+    }
+    setGroupEmails((prev) => [...prev, email]);
+    setGroupEmailDraft('');
+  };
+
+  const removeGroupEmail = (email: string) => {
+    setGroupEmails((prev) => prev.filter((e) => e !== email));
+  };
+
   const startChat = async () => {
     const email = peerEmail.trim().toLowerCase();
     if (!email) {
@@ -88,16 +147,36 @@ export function MessagesScreen({ navigation }: Props) {
     setStarting(true);
     try {
       const conv = await openDm(email);
-      setComposeOpen(false);
-      setPeerEmail('');
-      navigation.navigate('ChatThread', {
-        conversationId: conv.id,
-        peerName: conv.peer.name,
-        peerEmail: conv.peer.email,
-      });
+      closeCompose();
+      openThread(navigation, conv);
       void bootstrap();
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Could not start chat');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const startGroup = async () => {
+    if (!groupTitle.trim()) {
+      showToast('Enter a group name');
+      return;
+    }
+    if (groupEmails.length < 1) {
+      showToast('Add at least one friend’s email');
+      return;
+    }
+    setStarting(true);
+    try {
+      const conv = await createGroupChat({
+        title: groupTitle,
+        memberEmails: groupEmails,
+      });
+      closeCompose();
+      openThread(navigation, conv);
+      void bootstrap();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not create group');
     } finally {
       setStarting(false);
     }
@@ -127,12 +206,22 @@ export function MessagesScreen({ navigation }: Props) {
   return (
     <View style={styles.screen}>
       <View style={styles.toolbar}>
-        <Text style={styles.hint}>Message classmates by email (1:1)</Text>
-        <PrimaryButton
-          label="New chat"
-          onPress={() => setComposeOpen(true)}
-          style={styles.newBtn}
-        />
+        <Text style={styles.hint}>
+          Message classmates 1:1 or start a group community
+        </Text>
+        <View style={styles.toolbarActions}>
+          <PrimaryButton
+            label="New chat"
+            onPress={() => openCompose('dm')}
+            style={styles.actionBtn}
+          />
+          <PrimaryButton
+            label="New group"
+            variant="secondary"
+            onPress={() => openCompose('group')}
+            style={styles.actionBtn}
+          />
+        </View>
       </View>
 
       <FlatList
@@ -147,72 +236,171 @@ export function MessagesScreen({ navigation }: Props) {
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>No conversations yet</Text>
             <Text style={styles.emptyBody}>
-              Tap New chat and enter a classmate’s Study Buddy email.
+              Tap New chat for a 1:1 DM, or New group to create a community with
+              friends.
             </Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <Pressable
-            style={styles.row}
-            onPress={() =>
-              navigation.navigate('ChatThread', {
-                conversationId: item.id,
-                peerName: item.peer.name,
-                peerEmail: item.peer.email,
-              })
-            }
-          >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {item.peer.name
-                  .split(/\s+/)
-                  .filter(Boolean)
-                  .slice(0, 2)
-                  .map((p) => p[0]?.toUpperCase() ?? '')
-                  .join('') || '?'}
-              </Text>
-            </View>
-            <View style={styles.rowBody}>
-              <View style={styles.rowTop}>
-                <Text style={styles.peerName} numberOfLines={1}>
-                  {item.peer.name}
-                </Text>
-                {item.unread_count > 0 ? (
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>{item.unread_count}</Text>
-                  </View>
-                ) : null}
+        renderItem={({ item }) => {
+          const isGroup = item.type === 'group';
+          const initials = item.title
+            .split(/\s+/)
+            .filter(Boolean)
+            .slice(0, 2)
+            .map((p) => p[0]?.toUpperCase() ?? '')
+            .join('') || (isGroup ? 'G' : '?');
+          return (
+            <Pressable
+              style={styles.row}
+              onPress={() => openThread(navigation, item)}
+            >
+              <View
+                style={[styles.avatar, isGroup && styles.avatarGroup]}
+              >
+                {isGroup ? (
+                  <Ionicons name="people" size={20} color={colors.primary} />
+                ) : (
+                  <Text style={styles.avatarText}>{initials}</Text>
+                )}
               </View>
-              <Text style={styles.preview} numberOfLines={1}>
-                {item.last_message || item.peer.email}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-          </Pressable>
-        )}
+              <View style={styles.rowBody}>
+                <View style={styles.rowTop}>
+                  <Text style={styles.peerName} numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                  {item.unread_count > 0 ? (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>{item.unread_count}</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={styles.preview} numberOfLines={1}>
+                  {item.last_message ||
+                    (isGroup
+                      ? `${item.members.length} members`
+                      : item.peer.email)}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+            </Pressable>
+          );
+        }}
       />
 
-      <AppModal
-        visible={composeOpen}
-        onClose={() => setComposeOpen(false)}
-      >
-        <Text style={styles.modalTitle}>New message</Text>
-        <Text style={styles.modalHint}>
-          Enter the email your classmate uses to sign in to Study Buddy.
-        </Text>
-        <TextInput
-          value={peerEmail}
-          onChangeText={setPeerEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          placeholder="classmate@school.edu"
-          placeholderTextColor={colors.muted}
-          style={styles.input}
-        />
-        <PrimaryButton
-          label={starting ? 'Starting…' : 'Start chat'}
-          onPress={() => void startChat()}
-        />
+      <AppModal visible={composeOpen} onClose={closeCompose}>
+        <View style={styles.modeTabs}>
+          <Pressable
+            onPress={() => setComposeMode('dm')}
+            style={[
+              styles.modeTab,
+              composeMode === 'dm' && styles.modeTabActive,
+            ]}
+          >
+            <Text
+              style={[
+                styles.modeTabText,
+                composeMode === 'dm' && styles.modeTabTextActive,
+              ]}
+            >
+              Direct
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setComposeMode('group')}
+            style={[
+              styles.modeTab,
+              composeMode === 'group' && styles.modeTabActive,
+            ]}
+          >
+            <Text
+              style={[
+                styles.modeTabText,
+                composeMode === 'group' && styles.modeTabTextActive,
+              ]}
+            >
+              Group
+            </Text>
+          </Pressable>
+        </View>
+
+        {composeMode === 'dm' ? (
+          <>
+            <Text style={styles.modalTitle}>New message</Text>
+            <Text style={styles.modalHint}>
+              Enter the email your classmate uses to sign in to Study Buddy.
+            </Text>
+            <TextInput
+              value={peerEmail}
+              onChangeText={setPeerEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              placeholder="classmate@school.edu"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+            />
+            <PrimaryButton
+              label={starting ? 'Starting…' : 'Start chat'}
+              onPress={() => void startChat()}
+            />
+          </>
+        ) : (
+          <>
+            <Text style={styles.modalTitle}>New group community</Text>
+            <Text style={styles.modalHint}>
+              Name your group and add friends by their Study Buddy email. They
+              must open Messages once first.
+            </Text>
+            <TextInput
+              value={groupTitle}
+              onChangeText={setGroupTitle}
+              placeholder="Group name (e.g. Bio study crew)"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              maxLength={80}
+            />
+            <View style={styles.addRow}>
+              <TextInput
+                value={groupEmailDraft}
+                onChangeText={setGroupEmailDraft}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                placeholder="friend@school.edu"
+                placeholderTextColor={colors.muted}
+                style={[styles.input, styles.addInput]}
+                onSubmitEditing={addGroupEmail}
+                returnKeyType="done"
+              />
+              <PrimaryButton
+                label="Add"
+                variant="secondary"
+                onPress={addGroupEmail}
+                style={styles.addBtn}
+              />
+            </View>
+            {groupEmails.length > 0 ? (
+              <View style={styles.chipWrap}>
+                {groupEmails.map((email) => (
+                  <Pressable
+                    key={email}
+                    onPress={() => removeGroupEmail(email)}
+                    style={styles.chip}
+                  >
+                    <Text style={styles.chipText}>{email}</Text>
+                    <Ionicons name="close" size={14} color={colors.primary} />
+                  </Pressable>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.memberHint}>
+                Add at least one friend to create the group.
+              </Text>
+            )}
+            <PrimaryButton
+              label={starting ? 'Creating…' : 'Create group'}
+              onPress={() => void startGroup()}
+            />
+          </>
+        )}
       </AppModal>
     </View>
   );
@@ -246,7 +434,8 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.line,
   },
   hint: { color: colors.muted, fontSize: 13 },
-  newBtn: { alignSelf: 'flex-start' },
+  toolbarActions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  actionBtn: { alignSelf: 'flex-start' },
   list: { paddingVertical: 8 },
   emptyList: { flexGrow: 1, justifyContent: 'center' },
   empty: { alignItems: 'center', padding: 32, gap: 8 },
@@ -270,6 +459,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarGroup: {
+    borderRadius: 14,
+  },
   avatarText: { color: colors.primary, fontWeight: '800' },
   rowBody: { flex: 1, gap: 2 },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -285,6 +477,26 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
   preview: { color: colors.muted, fontSize: 13 },
+  modeTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 14,
+  },
+  modeTab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: 'center',
+    backgroundColor: colors.bg,
+  },
+  modeTabActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  modeTabText: { color: colors.muted, fontWeight: '700' },
+  modeTabTextActive: { color: colors.primary },
   modalTitle: {
     fontSize: 18,
     fontWeight: '800',
@@ -302,5 +514,33 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.ink,
     backgroundColor: '#fff',
+  },
+  addRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  addInput: { flex: 1, marginBottom: 10 },
+  addBtn: { marginTop: 0 },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: colors.primarySoft,
+  },
+  chipText: { color: colors.primary, fontSize: 13, fontWeight: '600' },
+  memberHint: {
+    color: colors.muted,
+    fontSize: 13,
+    marginBottom: 14,
   },
 });

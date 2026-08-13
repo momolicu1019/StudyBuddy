@@ -1,6 +1,6 @@
 # Firebase student chat setup
 
-StudyBuddy DMs use **Firebase Authentication + Cloud Firestore** (no FastAPI URL required).
+StudyBuddy student messaging (1:1 DMs + group communities) uses **Firebase Authentication + Cloud Firestore** (no FastAPI URL required).
 
 ## 1. Create a Firebase project
 
@@ -61,3 +61,10 @@ That Firestore error means the security rules denied a read/write.
 6. Retry **New chat** with the classmate’s Study Buddy email
 
 Starting a DM previously called `getDoc` on a conversation that did not exist yet. Rules that only checked `request.auth.uid in resource.data.memberIds` fail when `resource` is null — publish the updated rules (or use a build that includes the client fallback) to fix it.
+
+### Group chats
+
+- Tap **New group**, enter a community name, and add friends by Study Buddy email
+- Each friend must have opened **Messages** at least once (same as DMs)
+- Groups are stored as `chatConversations` docs with `type: "group"` (auto-generated ids)
+- Republish `firestore.rules` after pulling this update — older rules only allow 2-member DMs

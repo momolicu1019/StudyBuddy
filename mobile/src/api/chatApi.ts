@@ -1,6 +1,6 @@
 /**
- * Student 1:1 chat via Firebase Auth + Cloud Firestore.
- * Study data stays on-device; only DMs use Firebase.
+ * Student chat (1:1 DMs + group communities) via Firebase Auth + Cloud Firestore.
+ * Study data stays on-device; only messaging uses Firebase.
  */
 
 import {
@@ -39,6 +39,8 @@ import {
   isFirebaseConfigured,
 } from './firebaseApp';
 
+const MAX_GROUP_MEMBERS = 20;
+
 export type ChatUser = {
   id: string;
   email: string;
@@ -47,7 +49,11 @@ export type ChatUser = {
 
 export type ChatConversation = {
   id: string;
+  type: 'dm' | 'group';
+  /** Display title: peer name for DMs, group name for groups. */
+  title: string;
   peer: ChatUser;
+  members: ChatUser[];
   last_message: string | null;
   last_message_at: string | null;
   unread_count: number;
@@ -57,6 +63,7 @@ export type ChatMessage = {
   id: string;
   conversation_id: string;
   sender_id: string;
+  sender_name?: string;
   body: string;
   created_at: string;
 };
@@ -69,6 +76,9 @@ type UserDoc = {
 };
 
 type ConversationDoc = {
+  type?: 'dm' | 'group';
+  title?: string;
+  createdBy?: string;
   memberIds: string[];
   members: Record<string, { email: string; name: string }>;
   lastMessage: string | null;
@@ -331,6 +341,54 @@ async function requireUid(): Promise<string> {
   return user.uid;
 }
 
+function membersFromDoc(data: ConversationDoc): ChatUser[] {
+  return (data.memberIds || []).map((id) => {
+    const m = data.members?.[id];
+    return {
+      id,
+      email: m?.email || 'unknown',
+      name: m?.name || 'Student',
+    };
+  });
+}
+
+function mapConversation(
+  docSnap: { id: string; data: () => ConversationDoc },
+  uid: string,
+): ChatConversation | null {
+  const data = docSnap.data();
+  const memberIds = data.memberIds || [];
+  if (!memberIds.includes(uid)) return null;
+
+  const members = membersFromDoc(data);
+  const isGroup = data.type === 'group';
+  const peerId = memberIds.find((id) => id !== uid);
+  const peerMember = peerId
+    ? data.members?.[peerId] || { email: 'unknown', name: 'Student' }
+    : { email: '', name: data.title || 'Group' };
+
+  const title = isGroup
+    ? (data.title || 'Group chat').trim() || 'Group chat'
+    : peerMember.name;
+
+  return {
+    id: docSnap.id,
+    type: isGroup ? 'group' : 'dm',
+    title,
+    peer: {
+      id: peerId || docSnap.id,
+      email: isGroup
+        ? `${members.length} members`
+        : peerMember.email,
+      name: title,
+    },
+    members,
+    last_message: data.lastMessage ?? null,
+    last_message_at: tsToIso(data.lastMessageAt),
+    unread_count: Number(data.unread?.[uid] || 0),
+  };
+}
+
 export async function listConversations(): Promise<ChatConversation[]> {
   try {
     const uid = await requireUid();
@@ -342,20 +400,11 @@ export async function listConversations(): Promise<ChatConversation[]> {
     const snap = await getDocs(q);
     const rows: ChatConversation[] = [];
     for (const docSnap of snap.docs) {
-      const data = docSnap.data() as ConversationDoc;
-      const peerId = (data.memberIds || []).find((id) => id !== uid);
-      if (!peerId) continue;
-      const peer = data.members?.[peerId] || {
-        email: 'unknown',
-        name: 'Student',
-      };
-      rows.push({
-        id: docSnap.id,
-        peer: { id: peerId, email: peer.email, name: peer.name },
-        last_message: data.lastMessage ?? null,
-        last_message_at: tsToIso(data.lastMessageAt),
-        unread_count: Number(data.unread?.[uid] || 0),
-      });
+      const mapped = mapConversation(
+        { id: docSnap.id, data: () => docSnap.data() as ConversationDoc },
+        uid,
+      );
+      if (mapped) rows.push(mapped);
     }
     rows.sort((a, b) => {
       const at = a.last_message_at || '';
@@ -422,6 +471,7 @@ export async function openDm(peerEmailRaw: string): Promise<ChatConversation> {
     if (!alreadyExists) {
       const memberIds = [uid, peerUid].sort();
       const payload: ConversationDoc = {
+        type: 'dm',
         memberIds,
         members: {
           [uid]: { email: me.email, name: me.name },
@@ -444,20 +494,119 @@ export async function openDm(peerEmailRaw: string): Promise<ChatConversation> {
     if (!convSnap.exists()) {
       throw new Error('Could not create conversation');
     }
-    const conv = convSnap.data() as ConversationDoc;
-    return {
-      id,
-      peer: {
-        id: peerUid,
-        email: peerData.email,
-        name: peerData.name,
-      },
-      last_message: conv.lastMessage ?? null,
-      last_message_at: tsToIso(conv.lastMessageAt),
-      unread_count: Number(conv.unread?.[uid] || 0),
-    };
+    const mapped = mapConversation(
+      { id, data: () => convSnap.data() as ConversationDoc },
+      uid,
+    );
+    if (!mapped) throw new Error('Could not create conversation');
+    return mapped;
   } catch (err) {
     throw mapChatError(err, 'Could not start chat');
+  }
+}
+
+async function resolvePeerByEmail(
+  peerEmailRaw: string,
+  myEmail: string,
+): Promise<{ uid: string; email: string; name: string }> {
+  const db = getFirestoreDb();
+  const peerEmail = normalizeEmail(peerEmailRaw);
+  if (!peerEmail) throw new Error('Enter a classmate’s email');
+  if (peerEmail === myEmail) {
+    throw new Error('Cannot add yourself — you are already in the chat');
+  }
+
+  const emailSnap = await getDoc(doc(db, 'chatEmails', peerEmail));
+  if (!emailSnap.exists()) {
+    throw new Error(
+      `No Study Buddy chat account for ${peerEmail}. They need to open Messages once first.`,
+    );
+  }
+  const peerUid = String(emailSnap.data()?.uid || '');
+  if (!peerUid) throw new Error(`Invalid chat user for ${peerEmail}`);
+
+  const peerSnap = await getDoc(doc(db, 'chatUsers', peerUid));
+  const peerData = peerSnap.exists()
+    ? (peerSnap.data() as UserDoc)
+    : { email: peerEmail, name: peerEmail, localAuthId: '' };
+
+  return {
+    uid: peerUid,
+    email: peerData.email,
+    name: peerData.name,
+  };
+}
+
+/** Create a group chat community with friends (by Study Buddy email). */
+export async function createGroupChat(input: {
+  title: string;
+  memberEmails: string[];
+}): Promise<ChatConversation> {
+  try {
+    const uid = await requireUid();
+    const db = getFirestoreDb();
+    const title = input.title.trim().replace(/\s+/g, ' ');
+    if (!title) throw new Error('Enter a group name');
+    if (title.length > 80) throw new Error('Group name is too long');
+
+    const meSnap = await getDoc(doc(db, 'chatUsers', uid));
+    if (!meSnap.exists()) {
+      throw new Error('Chat profile missing — reopen Messages');
+    }
+    const me = meSnap.data() as UserDoc;
+
+    const uniqueEmails = Array.from(
+      new Set(
+        (input.memberEmails || [])
+          .map(normalizeEmail)
+          .filter(Boolean),
+      ),
+    );
+    if (uniqueEmails.length < 1) {
+      throw new Error('Add at least one friend’s email');
+    }
+    if (uniqueEmails.length + 1 > MAX_GROUP_MEMBERS) {
+      throw new Error(`Groups can have at most ${MAX_GROUP_MEMBERS} members`);
+    }
+
+    const members: Record<string, { email: string; name: string }> = {
+      [uid]: { email: me.email, name: me.name },
+    };
+    const unread: Record<string, number> = { [uid]: 0 };
+
+    for (const email of uniqueEmails) {
+      const peer = await resolvePeerByEmail(email, me.email);
+      if (members[peer.uid]) continue;
+      members[peer.uid] = { email: peer.email, name: peer.name };
+      unread[peer.uid] = 0;
+    }
+
+    const memberIds = Object.keys(members).sort();
+    if (memberIds.length < 2) {
+      throw new Error('Add at least one friend who has opened Messages');
+    }
+
+    const convRef = doc(collection(db, 'chatConversations'));
+    const payload: ConversationDoc = {
+      type: 'group',
+      title,
+      createdBy: uid,
+      memberIds,
+      members,
+      lastMessage: null,
+      lastMessageAt: null,
+      unread,
+    };
+    await setDoc(convRef, payload);
+
+    const mapped = mapConversation(
+      { id: convRef.id, data: () => payload },
+      uid,
+    );
+    if (!mapped) throw new Error('Could not create group');
+    return mapped;
+  } catch (err) {
+    throw mapChatError(err, 'Could not create group');
   }
 }
 
@@ -493,6 +642,7 @@ export async function listMessages(
         id: d.id,
         conversation_id: conversationId,
         sender_id: data.senderId,
+        sender_name: conv.members?.[data.senderId]?.name,
         body: data.body,
         created_at: tsToIso(data.createdAt) || new Date().toISOString(),
       } satisfies ChatMessage;
@@ -579,15 +729,44 @@ export function subscribeMessages(
   onError?: (error: Error) => void,
 ): Unsubscribe {
   const db = getFirestoreDb();
+  let memberNames: Record<string, string> = {};
+  let latestRows: ChatMessage[] = [];
+
+  const emit = () => {
+    onChange(
+      latestRows.map((m) => ({
+        ...m,
+        sender_name: memberNames[m.sender_id] || m.sender_name,
+      })),
+    );
+  };
+
+  const unsubConv = onSnapshot(
+    doc(db, 'chatConversations', conversationId),
+    (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data() as ConversationDoc;
+      const next: Record<string, string> = {};
+      for (const [id, m] of Object.entries(data.members || {})) {
+        next[id] = m.name;
+      }
+      memberNames = next;
+      if (latestRows.length > 0) emit();
+    },
+    () => {
+      // ignore conversation metadata errors
+    },
+  );
+
   const q = query(
     collection(db, 'chatConversations', conversationId, 'messages'),
     orderBy('createdAt', 'asc'),
     limit(200),
   );
-  return onSnapshot(
+  const unsubMsgs = onSnapshot(
     q,
     (snap) => {
-      const rows = snap.docs.map((d) => {
+      latestRows = snap.docs.map((d) => {
         const data = d.data() as {
           senderId: string;
           body: string;
@@ -597,12 +776,18 @@ export function subscribeMessages(
           id: d.id,
           conversation_id: conversationId,
           sender_id: data.senderId,
+          sender_name: memberNames[data.senderId],
           body: data.body,
           created_at: tsToIso(data.createdAt) || new Date().toISOString(),
         } satisfies ChatMessage;
       });
-      onChange(rows);
+      emit();
     },
     (err) => onError?.(err),
   );
+
+  return () => {
+    unsubConv();
+    unsubMsgs();
+  };
 }

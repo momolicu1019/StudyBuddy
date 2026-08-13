@@ -1,10 +1,11 @@
 /**
  * Local OS notifications for nearing deadlines (amber + red only).
  *
- * Green / far deadlines are never scheduled. Reminders fire four times a
- * day at 9:00, 12:00, 15:00, and 18:00 local on each amber or red calendar
- * day, with a one-time catch-up if every slot for today already passed
- * while the deadline is still nearing.
+ * Green / far deadlines are never scheduled. Reminders fire every 2 hours
+ * (local clock: :00 on even hours) on each amber or red calendar day, with a
+ * one-time catch-up if every slot for today already passed while the deadline
+ * is still nearing. Only the next few days of slots are queued so we stay under
+ * the OS pending-notification limit; opening the app reschedules further out.
  */
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -23,9 +24,18 @@ import {
 } from './deadlineUtils';
 
 const CHANNEL_ID = 'deadline-reminders';
-/** Local reminder hours: 9am, 12nn, 3pm, 6pm. */
-const REMINDER_HOURS = [9, 12, 15, 18] as const;
+/** Remind every 2 hours on the local clock (00:00 … 22:00). */
+const REMINDER_INTERVAL_HOURS = 2;
+const REMINDER_HOURS = Array.from(
+  { length: 24 / REMINDER_INTERVAL_HOURS },
+  (_, i) => i * REMINDER_INTERVAL_HOURS,
+);
 const REMINDER_MINUTE = 0;
+/**
+ * Cap how far ahead we schedule DATE triggers. iOS allows ~64 pending
+ * notifications app-wide; 72h × every 2h ≈ 36 slots per deadline.
+ */
+const SCHEDULE_LOOKAHEAD_MS = 72 * 60 * 60 * 1000;
 /** Keep nudging overdue (red) items for a few days past due. */
 const OVERDUE_REMINDER_DAYS = 3;
 const CATCHUP_PREFIX = 'deadline.notif.catchup.';
@@ -209,6 +219,7 @@ async function scheduleForDeadline(deadline: Deadline, now: Date): Promise<void>
   const amberStart = addDays(dueDay, -7);
   const rangeEnd = addDays(dueDay, OVERDUE_REMINDER_DAYS);
   const today = startOfLocalDay(now);
+  const scheduleUntil = now.getTime() + SCHEDULE_LOOKAHEAD_MS;
 
   for (
     let day = new Date(amberStart.getTime());
@@ -224,6 +235,7 @@ async function scheduleForDeadline(deadline: Deadline, now: Date): Promise<void>
     for (const hour of REMINDER_HOURS) {
       const fireAt = reminderAt(day, hour);
       if (fireAt.getTime() <= now.getTime()) continue;
+      if (fireAt.getTime() > scheduleUntil) continue;
 
       await scheduleDateNotification({
         identifier: `deadline-${deadline.id}-${dayIso}-${hourSlotLabel(hour)}`,

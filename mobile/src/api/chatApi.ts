@@ -88,6 +88,13 @@ type ConversationDoc = {
   lastMessage: string | null;
   lastMessageAt: Timestamp | null;
   unread: Record<string, number>;
+  /** Soft-delete: hide this thread from a member's inbox. */
+  hiddenFor?: Record<string, boolean>;
+};
+
+export type ChatFriend = {
+  email: string;
+  name: string;
 };
 
 function normalizeEmail(email: string): string {
@@ -461,10 +468,12 @@ function membersFromDoc(data: ConversationDoc): ChatUser[] {
 function mapConversation(
   docSnap: { id: string; data: () => ConversationDoc },
   uid: string,
+  opts?: { includeHidden?: boolean },
 ): ChatConversation | null {
   const data = docSnap.data();
   const memberIds = data.memberIds || [];
   if (!memberIds.includes(uid)) return null;
+  if (!opts?.includeHidden && data.hiddenFor?.[uid]) return null;
 
   const members = membersFromDoc(data);
   const isGroup = data.type === 'group';
@@ -493,6 +502,37 @@ function mapConversation(
     last_message_at: tsToIso(data.lastMessageAt),
     unread_count: Number(data.unread?.[uid] || 0),
   };
+}
+
+function friendsFromConversationDocs(
+  docs: Array<{ data: () => ConversationDoc }>,
+  uid: string,
+  myEmail?: string,
+): ChatFriend[] {
+  const byEmail = new Map<string, ChatFriend>();
+  const selfEmail = myEmail ? normalizeEmail(myEmail) : '';
+
+  for (const docSnap of docs) {
+    const data = docSnap.data();
+    if (!(data.memberIds || []).includes(uid)) continue;
+    for (const [memberId, info] of Object.entries(data.members || {})) {
+      if (memberId === uid) continue;
+      const email = normalizeEmail(info?.email || '');
+      if (!email || email === 'unknown' || (selfEmail && email === selfEmail)) {
+        continue;
+      }
+      if (!byEmail.has(email)) {
+        byEmail.set(email, {
+          email,
+          name: (info?.name || email).trim() || email,
+        });
+      }
+    }
+  }
+
+  return Array.from(byEmail.values()).sort((a, b) =>
+    a.email.localeCompare(b.email),
+  );
 }
 
 export async function listConversations(): Promise<ChatConversation[]> {
@@ -525,13 +565,16 @@ export async function listConversations(): Promise<ChatConversation[]> {
 
 /** Live conversation list (previews + unread) for the signed-in chat user. */
 export function subscribeConversations(
-  onChange: (conversations: ChatConversation[]) => void,
+  onChange: (
+    conversations: ChatConversation[],
+    friends: ChatFriend[],
+  ) => void,
   onError?: (error: Error) => void,
 ): Unsubscribe {
   const auth = getFirebaseAuth();
   const uid = auth.currentUser?.uid;
   if (!uid) {
-    onChange([]);
+    onChange([], []);
     return () => undefined;
   }
 
@@ -544,11 +587,12 @@ export function subscribeConversations(
     q,
     (snap) => {
       const rows: ChatConversation[] = [];
-      for (const docSnap of snap.docs) {
-        const mapped = mapConversation(
-          { id: docSnap.id, data: () => docSnap.data() as ConversationDoc },
-          uid,
-        );
+      const rawDocs = snap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        data: () => docSnap.data() as ConversationDoc,
+      }));
+      for (const docSnap of rawDocs) {
+        const mapped = mapConversation(docSnap, uid);
         if (mapped) rows.push(mapped);
       }
       rows.sort((a, b) => {
@@ -556,7 +600,7 @@ export function subscribeConversations(
         const bt = b.last_message_at || '';
         return bt.localeCompare(at);
       });
-      onChange(rows);
+      onChange(rows, friendsFromConversationDocs(rawDocs, uid));
     },
     (err) => onError?.(mapChatError(err, 'Could not sync conversations')),
   );
@@ -633,6 +677,9 @@ export async function openDm(peerEmailRaw: string): Promise<ChatConversation> {
         const again = await getDoc(convRef);
         if (!again.exists()) throw createErr;
       }
+    } else {
+      // Reopening a previously deleted (hidden) DM restores it in the inbox.
+      await clearConversationHidden(convRef.id, uid);
     }
 
     const convSnap = await getDoc(convRef);
@@ -887,6 +934,78 @@ export async function addGroupMembers(
     return mapped;
   } catch (err) {
     throw mapChatError(err, 'Could not add members');
+  }
+}
+
+async function clearConversationHidden(
+  conversationId: string,
+  uid: string,
+): Promise<void> {
+  const db = getFirestoreDb();
+  const convRef = doc(db, 'chatConversations', conversationId);
+  const convSnap = await getDoc(convRef);
+  if (!convSnap.exists()) return;
+  const conv = convSnap.data() as ConversationDoc;
+  if (!conv.hiddenFor?.[uid]) return;
+  const nextHidden = { ...(conv.hiddenFor || {}) };
+  delete nextHidden[uid];
+  await updateDoc(convRef, { hiddenFor: nextHidden });
+}
+
+/** Hide a conversation from the current user's inbox (soft-delete). */
+export async function hideConversation(conversationId: string): Promise<void> {
+  try {
+    const uid = await requireUid();
+    const db = getFirestoreDb();
+    const convRef = doc(db, 'chatConversations', conversationId);
+    const convSnap = await getDoc(convRef);
+    if (!convSnap.exists()) throw new Error('Conversation not found');
+    const conv = convSnap.data() as ConversationDoc;
+    if (!(conv.memberIds || []).includes(uid)) {
+      throw new Error('Not a member of this conversation');
+    }
+    await updateDoc(convRef, {
+      hiddenFor: { ...(conv.hiddenFor || {}), [uid]: true },
+    });
+  } catch (err) {
+    throw mapChatError(err, 'Could not delete chat');
+  }
+}
+
+/** Leave a group community — removes you from membership and your inbox. */
+export async function leaveGroup(conversationId: string): Promise<void> {
+  try {
+    const uid = await requireUid();
+    const db = getFirestoreDb();
+    const convRef = doc(db, 'chatConversations', conversationId);
+    const convSnap = await getDoc(convRef);
+    if (!convSnap.exists()) throw new Error('Conversation not found');
+    const conv = convSnap.data() as ConversationDoc;
+    if (conv.type !== 'group') {
+      throw new Error('Only group chats can be left');
+    }
+    if (!(conv.memberIds || []).includes(uid)) {
+      throw new Error('Not a member of this conversation');
+    }
+
+    const memberIds = (conv.memberIds || []).filter((id) => id !== uid);
+    const nextMembers: Record<string, { email: string; name: string }> = {};
+    const nextUnread: Record<string, number> = {};
+    for (const id of memberIds) {
+      nextMembers[id] = conv.members?.[id] || {
+        email: 'unknown',
+        name: 'Student',
+      };
+      nextUnread[id] = Number(conv.unread?.[id] || 0);
+    }
+
+    await updateDoc(convRef, {
+      memberIds,
+      members: nextMembers,
+      unread: nextUnread,
+    });
+  } catch (err) {
+    throw mapChatError(err, 'Could not leave group');
   }
 }
 

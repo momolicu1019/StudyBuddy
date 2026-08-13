@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   addGroupMembers,
   ensureChatSession,
+  leaveGroup,
   markConversationRead,
   sendMessage,
   subscribeMessages,
@@ -65,6 +66,8 @@ export function ChatThreadScreen({ navigation, route }: Props) {
   const [inviteEmails, setInviteEmails] = useState<string[]>([]);
   const [inviteDraft, setInviteDraft] = useState('');
   const [adding, setAdding] = useState(false);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaving, setLeaving] = useState(false);
 
   const displayMemberCount = useMemo(() => {
     if (!isGroup) return 0;
@@ -119,6 +122,14 @@ export function ChatThreadScreen({ navigation, route }: Props) {
                 style={styles.headerBtn}
               >
                 <Ionicons name="create-outline" size={22} color={colors.primary} />
+              </Pressable>
+              <Pressable
+                onPress={() => setLeaveOpen(true)}
+                hitSlop={10}
+                accessibilityLabel="Leave group"
+                style={styles.headerBtn}
+              >
+                <Ionicons name="exit-outline" size={22} color={colors.danger} />
               </Pressable>
             </View>
           )
@@ -312,6 +323,25 @@ export function ChatThreadScreen({ navigation, route }: Props) {
     }
   };
 
+  const onLeaveGroup = async () => {
+    if (leaving) return;
+    setLeaving(true);
+    try {
+      await leaveGroup(conversationId);
+      setLeaveOpen(false);
+      showToast('Left group');
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+      } else {
+        navigation.navigate('Messages');
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not leave group');
+    } finally {
+      setLeaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -489,6 +519,35 @@ export function ChatThreadScreen({ navigation, route }: Props) {
           onPress={() => void onAddMembers()}
         />
       </AppModal>
+
+      <AppModal visible={leaveOpen} onClose={() => setLeaveOpen(false)}>
+        <View style={styles.confirmWrap}>
+          <View style={styles.confirmIcon}>
+            <Ionicons name="exit-outline" size={28} color={colors.danger} />
+          </View>
+          <Text style={[styles.modalTitle, styles.confirmTitle]}>
+            Leave this group?
+          </Text>
+          <Text style={styles.confirmBody}>
+            Leave “{peerName || 'this group'}”? It will be removed from your chat
+            box. Someone must invite you again to rejoin.
+          </Text>
+          <View style={styles.modalActions}>
+            <PrimaryButton
+              label="Cancel"
+              variant="secondary"
+              onPress={() => setLeaveOpen(false)}
+              style={styles.modalActionBtn}
+            />
+            <PrimaryButton
+              label={leaving ? 'Leaving…' : 'Leave group'}
+              variant="danger"
+              onPress={() => void onLeaveGroup()}
+              style={styles.modalActionBtn}
+            />
+          </View>
+        </View>
+      </AppModal>
     </KeyboardAvoidingView>
   );
 }
@@ -637,4 +696,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 14,
   },
+  confirmWrap: { alignItems: 'center' },
+  confirmIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.dangerSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  confirmTitle: { textAlign: 'center' },
+  confirmBody: {
+    color: colors.muted,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 18,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+  },
+  modalActionBtn: { flex: 1 },
 });

@@ -67,11 +67,12 @@ export function AccountModal({ visible, onClose }: Props) {
           <Text style={styles.metaValue}>
             {session?.lastSyncedAt
               ? `Last sync ${new Date(session.lastSyncedAt).toLocaleString()}`
-              : 'Keep folders & flashcards in your Google account'}
+              : 'Keep folders, flashcards, and chats in your Google account'}
           </Text>
           <Text style={[styles.sub, { marginTop: 6 }]}>
-            Sync up uploads this account’s study data to a private Drive app
-            folder. Sync down replaces local data with the cloud copy.
+            Sync up uploads this account’s study data and Messages chats to a
+            private Drive app folder. Sync down replaces local study data and
+            re-adds backed-up chats.
           </Text>
           <View style={{ gap: 10, marginTop: 12 }}>
             <PrimaryButton

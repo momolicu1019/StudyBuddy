@@ -90,3 +90,11 @@ Notes:
 - Push requires a **development / preview / production** build (not reliable in Expo Go for all devices)
 - Republish `firestore.rules` so `expoPushTokens` updates are allowed
 - Android uses the `chat-messages` notification channel
+
+### Google Drive sync (chat backup)
+
+**Sync up to Google** also snapshots your Student Messages (DMs + groups, up to 200 messages each) into the same private Drive app-data file as folders/flashcards.
+
+**Sync down from Google** restores study data locally and **re-adds** any missing conversations/messages into Firestore (merge — does not wipe live chats).
+
+Republish `firestore.rules` so restored messages (`restored: true`) are allowed.

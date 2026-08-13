@@ -1,5 +1,10 @@
 import * as FileSystem from 'expo-file-system/legacy';
 
+import {
+  exportChatBackup,
+  restoreChatBackup,
+  type ChatBackupPayload,
+} from '../api/chatApi';
 import type { AuthUser, CloudActionResult } from './cloud';
 import type { LocalDatabase, StoredSource } from './schema';
 import {
@@ -39,6 +44,11 @@ export type GoogleDriveSyncPayload = {
     subject_id?: number;
     created_at: string;
   }>;
+  /**
+   * Student Messages (Firestore DMs + groups) snapshot.
+   * Optional for backward compatibility with older sync files.
+   */
+  chatBackup?: ChatBackupPayload | null;
 };
 
 function authHeaders(accessToken: string): Record<string, string> {
@@ -130,6 +140,20 @@ async function buildPayload(user: AuthUser): Promise<GoogleDriveSyncPayload> {
     });
   }
 
+  // Student chat lives in Firestore — snapshot it into the same Drive file.
+  let chatBackup: ChatBackupPayload | null = null;
+  try {
+    const { ensureChatSession } = await import('../api/chatApi');
+    await ensureChatSession({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+    });
+    chatBackup = await exportChatBackup();
+  } catch {
+    chatBackup = null;
+  }
+
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
@@ -141,6 +165,7 @@ async function buildPayload(user: AuthUser): Promise<GoogleDriveSyncPayload> {
       pdfs: [],
     },
     sourceFiles,
+    chatBackup,
   };
 }
 
@@ -203,7 +228,10 @@ async function downloadSyncPayload(
   return data;
 }
 
-async function restorePayload(payload: GoogleDriveSyncPayload): Promise<number> {
+async function restorePayload(
+  payload: GoogleDriveSyncPayload,
+  user: AuthUser,
+): Promise<{ sources: number; chatConversations: number; chatMessages: number }> {
   const scope = getActiveStorageScope();
   const dir = sourcesDirForScope(scope);
   const info = await FileSystem.getInfoAsync(dir);
@@ -236,10 +264,27 @@ async function restorePayload(payload: GoogleDriveSyncPayload): Promise<number> 
     pdfs: restoredSources,
   };
   await saveLocalDb(database);
-  return restoredSources.length;
+
+  let chatConversations = 0;
+  let chatMessages = 0;
+  if (payload.chatBackup) {
+    const chatResult = await restoreChatBackup(payload.chatBackup, {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+    });
+    chatConversations = chatResult.conversations;
+    chatMessages = chatResult.messages;
+  }
+
+  return {
+    sources: restoredSources.length,
+    chatConversations,
+    chatMessages,
+  };
 }
 
-/** Upload this account's local study data to the signed-in Google Drive app data. */
+/** Upload this account's local study data + chat backup to Google Drive app data. */
 export async function syncUpToGoogleDrive(
   user: AuthUser,
   accessToken: string,
@@ -256,11 +301,16 @@ export async function syncUpToGoogleDrive(
     const existingId = await findSyncFileId(accessToken);
     await uploadSyncFile(accessToken, payload, existingId);
     const when = payload.exportedAt;
+    const chatCount = payload.chatBackup?.conversations?.length ?? 0;
+    const chatPart =
+      chatCount > 0
+        ? `, ${chatCount} chat${chatCount === 1 ? '' : 's'}`
+        : '';
     return {
       ok: true,
       message: `Synced up to Google Drive (${payload.sourceFiles.length} source file${
         payload.sourceFiles.length === 1 ? '' : 's'
-      }).`,
+      }${chatPart}).`,
       lastSyncedAt: when,
     };
   } catch (error) {
@@ -272,8 +322,9 @@ export async function syncUpToGoogleDrive(
   }
 }
 
-/** Download study data from Google Drive app data into this account's local storage. */
+/** Download study data + chat backup from Google Drive into this account. */
 export async function syncDownFromGoogleDrive(
+  user: AuthUser,
   accessToken: string,
 ): Promise<CloudActionResult> {
   if (!accessToken) {
@@ -293,13 +344,23 @@ export async function syncDownFromGoogleDrive(
       };
     }
     const payload = await downloadSyncPayload(accessToken, fileId);
-    const sourceCount = await restorePayload(payload);
+    const restored = await restorePayload(payload, user);
     const subjects = payload.database.subjects?.length ?? 0;
+    const chatPart =
+      restored.chatConversations > 0 || restored.chatMessages > 0
+        ? `, ${restored.chatConversations} chat${
+            restored.chatConversations === 1 ? '' : 's'
+          } / ${restored.chatMessages} message${
+            restored.chatMessages === 1 ? '' : 's'
+          }`
+        : payload.chatBackup
+          ? ', chats already up to date'
+          : '';
     return {
       ok: true,
       message: `Synced down from Google Drive (${subjects} folder${
         subjects === 1 ? '' : 's'
-      }, ${sourceCount} source file${sourceCount === 1 ? '' : 's'}).`,
+      }, ${restored.sources} source file${restored.sources === 1 ? '' : 's'}${chatPart}).`,
       lastSyncedAt: payload.exportedAt,
     };
   } catch (error) {

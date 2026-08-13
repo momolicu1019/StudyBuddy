@@ -1057,3 +1057,260 @@ export function subscribeMessages(
     unsubMsgs();
   };
 }
+
+// ---------------------------------------------------------------------------
+// Google Drive chat backup (export / restore)
+// ---------------------------------------------------------------------------
+
+export type ChatBackupMessage = {
+  id: string;
+  senderId: string;
+  body: string;
+  createdAt: string;
+};
+
+export type ChatBackupConversation = {
+  id: string;
+  type: 'dm' | 'group';
+  title?: string;
+  createdBy?: string;
+  memberIds: string[];
+  members: Record<string, { email: string; name: string }>;
+  lastMessage: string | null;
+  lastMessageAt: string | null;
+  unread: Record<string, number>;
+  messages: ChatBackupMessage[];
+};
+
+export type ChatBackupPayload = {
+  version: 1;
+  exportedAt: string;
+  /** Firebase uid that owned this export (may be remapped on restore). */
+  firebaseUid: string;
+  conversations: ChatBackupConversation[];
+};
+
+export type ChatBackupRestoreResult = {
+  conversations: number;
+  messages: number;
+};
+
+const MAX_BACKUP_MESSAGES_PER_CONV = 200;
+
+function remapUid(id: string, fromUid: string, toUid: string): string {
+  if (!fromUid || fromUid === toUid) return id;
+  return id === fromUid ? toUid : id;
+}
+
+function remapDmConversationId(
+  conversationId: string,
+  fromUid: string,
+  toUid: string,
+): string {
+  if (!fromUid || fromUid === toUid) return conversationId;
+  const parts = conversationId.split('_');
+  if (parts.length !== 2) return conversationId;
+  if (parts[0] !== fromUid && parts[1] !== fromUid) return conversationId;
+  return [remapUid(parts[0], fromUid, toUid), remapUid(parts[1], fromUid, toUid)]
+    .sort()
+    .join('_');
+}
+
+function isoToTimestamp(iso: string | null | undefined): Timestamp | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  return Timestamp.fromMillis(ms);
+}
+
+/** Export this user's conversations + recent messages for Drive sync. */
+export async function exportChatBackup(): Promise<ChatBackupPayload | null> {
+  if (!isChatApiConfigured()) return null;
+  try {
+    const uid = await requireUid();
+    const db = getFirestoreDb();
+    const q = query(
+      collection(db, 'chatConversations'),
+      where('memberIds', 'array-contains', uid),
+    );
+    const snap = await getDocs(q);
+    const conversations: ChatBackupConversation[] = [];
+
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data() as ConversationDoc;
+      const memberIds = data.memberIds || [];
+      if (!memberIds.includes(uid)) continue;
+
+      const msgSnap = await getDocs(
+        query(
+          collection(db, 'chatConversations', docSnap.id, 'messages'),
+          orderBy('createdAt', 'asc'),
+          limit(MAX_BACKUP_MESSAGES_PER_CONV),
+        ),
+      );
+      const messages: ChatBackupMessage[] = msgSnap.docs.map((m) => {
+        const row = m.data() as {
+          senderId: string;
+          body: string;
+          createdAt?: Timestamp;
+        };
+        return {
+          id: m.id,
+          senderId: row.senderId,
+          body: row.body,
+          createdAt: tsToIso(row.createdAt) || new Date().toISOString(),
+        };
+      });
+
+      conversations.push({
+        id: docSnap.id,
+        type: data.type === 'group' ? 'group' : 'dm',
+        title: data.title,
+        createdBy: data.createdBy,
+        memberIds,
+        members: data.members || {},
+        lastMessage: data.lastMessage ?? null,
+        lastMessageAt: tsToIso(data.lastMessageAt),
+        unread: data.unread || {},
+        messages,
+      });
+    }
+
+    return {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      firebaseUid: uid,
+      conversations,
+    };
+  } catch {
+    // Chat backup is best-effort — study sync should still succeed.
+    return null;
+  }
+}
+
+/**
+ * Restore conversations/messages from a Drive chat backup into Firestore.
+ * Merges missing threads/messages; does not delete live chat data.
+ */
+export async function restoreChatBackup(
+  backup: ChatBackupPayload | null | undefined,
+  sessionUser: { id: string; email: string; name: string },
+): Promise<ChatBackupRestoreResult> {
+  const empty = { conversations: 0, messages: 0 };
+  if (!backup || backup.version !== 1 || !Array.isArray(backup.conversations)) {
+    return empty;
+  }
+  if (!isChatApiConfigured()) return empty;
+
+  try {
+    await ensureChatSession(sessionUser);
+    const uid = await requireUid();
+    const fromUid = backup.firebaseUid || uid;
+    const db = getFirestoreDb();
+
+    let restoredConversations = 0;
+    let restoredMessages = 0;
+
+    for (const raw of backup.conversations) {
+      if (!raw || !Array.isArray(raw.memberIds) || raw.memberIds.length < 2) {
+        continue;
+      }
+
+      const isGroup = raw.type === 'group';
+      const conversationId = isGroup
+        ? raw.id
+        : remapDmConversationId(raw.id, fromUid, uid);
+
+      const memberIds = Array.from(
+        new Set(raw.memberIds.map((id) => remapUid(id, fromUid, uid))),
+      ).sort();
+      if (!memberIds.includes(uid)) continue;
+
+      const members: Record<string, { email: string; name: string }> = {};
+      for (const [id, info] of Object.entries(raw.members || {})) {
+        const mappedId = remapUid(id, fromUid, uid);
+        members[mappedId] = {
+          email: info?.email || 'unknown',
+          name: info?.name || 'Student',
+        };
+      }
+
+      const unread: Record<string, number> = {};
+      for (const [id, count] of Object.entries(raw.unread || {})) {
+        unread[remapUid(id, fromUid, uid)] = Number(count) || 0;
+      }
+      for (const id of memberIds) {
+        if (unread[id] == null) unread[id] = 0;
+      }
+
+      const convRef = doc(db, 'chatConversations', conversationId);
+      const existing = await getDoc(convRef);
+      if (!existing.exists()) {
+        const payload: ConversationDoc = {
+          type: isGroup ? 'group' : 'dm',
+          ...(isGroup
+            ? {
+                title:
+                  (raw.title || 'Group chat').trim().slice(0, 80) ||
+                  'Group chat',
+                // Restoring user becomes createdBy so group create rules pass.
+                createdBy: uid,
+              }
+            : {}),
+          memberIds,
+          members,
+          lastMessage: raw.lastMessage ?? null,
+          lastMessageAt: isoToTimestamp(raw.lastMessageAt),
+          unread,
+        };
+        try {
+          await setDoc(convRef, payload);
+          restoredConversations += 1;
+        } catch {
+          // Skip conversations we cannot recreate (rules / race).
+          continue;
+        }
+      } else {
+        const live = existing.data() as ConversationDoc;
+        if (!(live.memberIds || []).includes(uid)) continue;
+        restoredConversations += 1;
+      }
+
+      for (const msg of raw.messages || []) {
+        if (!msg?.id || !msg.body?.trim()) continue;
+        const senderId = remapUid(msg.senderId, fromUid, uid);
+        if (!memberIds.includes(senderId)) continue;
+
+        const messageRef = doc(
+          db,
+          'chatConversations',
+          conversationId,
+          'messages',
+          msg.id,
+        );
+        try {
+          const msgSnap = await getDoc(messageRef);
+          if (msgSnap.exists()) continue;
+          const createdAt =
+            isoToTimestamp(msg.createdAt) || Timestamp.now();
+          await setDoc(messageRef, {
+            senderId,
+            body: String(msg.body).slice(0, 4000),
+            createdAt,
+            restored: true,
+          });
+          restoredMessages += 1;
+        } catch {
+          // skip individual message failures
+        }
+      }
+    }
+
+    return {
+      conversations: restoredConversations,
+      messages: restoredMessages,
+    };
+  } catch {
+    return empty;
+  }
+}

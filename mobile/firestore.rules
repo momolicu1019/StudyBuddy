@@ -98,10 +98,20 @@ service cloud.firestore {
       match /messages/{messageId} {
         allow read: if isConversationMember(conversationId);
         allow create: if isConversationMember(conversationId)
-          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.senderId is string
           && request.resource.data.body is string
           && request.resource.data.body.size() > 0
-          && request.resource.data.body.size() <= 4000;
+          && request.resource.data.body.size() <= 4000
+          && (
+            // Normal sends: only as yourself.
+            request.resource.data.senderId == request.auth.uid
+            // Drive sync restore: members may re-add historical messages
+            // authored by anyone already in the conversation.
+            || (
+              request.resource.data.restored == true
+              && request.resource.data.senderId in get(/databases/$(database)/documents/chatConversations/$(conversationId)).data.memberIds
+            )
+          );
         allow update, delete: if false;
       }
     }

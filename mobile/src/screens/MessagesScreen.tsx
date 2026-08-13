@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   createGroupChat,
   ensureChatSession,
+  getCachedChatUser,
   hideConversation,
   isChatApiConfigured,
   leaveGroup,
@@ -96,6 +97,47 @@ export function MessagesScreen({ navigation }: Props) {
     let unsub: (() => void) | undefined;
     let cancelled = false;
     setError(null);
+
+    const startInbox = () => {
+      if (cancelled) return;
+      unsub = subscribeConversations(
+        (rows, friendRows) => {
+          if (cancelled) return;
+          setConversations(rows);
+          setFriends(friendRows);
+          setError(null);
+          setLoading(false);
+          setRefreshing(false);
+        },
+        (err) => {
+          if (cancelled) return;
+          setError(err.message);
+          setLoading(false);
+          setRefreshing(false);
+        },
+      );
+    };
+
+    // If chat was already ensured (header/unread watcher), subscribe immediately
+    // instead of waiting on another auth round-trip.
+    if (getCachedChatUser()) {
+      startInbox();
+      void ensureChatSession({
+        id: session.user.id,
+        email: session.user.email,
+        name: session.user.name,
+      }).catch((e) => {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : 'Could not load messages');
+        setLoading(false);
+        setRefreshing(false);
+      });
+      return () => {
+        cancelled = true;
+        unsub?.();
+      };
+    }
+
     setLoading(true);
 
     void (async () => {
@@ -106,22 +148,7 @@ export function MessagesScreen({ navigation }: Props) {
           name: session.user.name,
         });
         if (cancelled) return;
-        unsub = subscribeConversations(
-          (rows, friendRows) => {
-            if (cancelled) return;
-            setConversations(rows);
-            setFriends(friendRows);
-            setError(null);
-            setLoading(false);
-            setRefreshing(false);
-          },
-          (err) => {
-            if (cancelled) return;
-            setError(err.message);
-            setLoading(false);
-            setRefreshing(false);
-          },
-        );
+        startInbox();
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : 'Could not load messages');

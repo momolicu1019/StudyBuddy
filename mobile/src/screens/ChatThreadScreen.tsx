@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   addGroupMembers,
   ensureChatSession,
+  getCachedChatUser,
   leaveGroup,
   markConversationRead,
   registerChatPushForCurrentUser,
@@ -146,6 +147,50 @@ export function ChatThreadScreen({ navigation, route }: Props) {
     let unsub: (() => void) | undefined;
     let cancelled = false;
 
+    const startMessages = (uid: string) => {
+      if (cancelled) return;
+      setMyId(uid);
+      unsub = subscribeMessages(
+        conversationId,
+        (rows) => {
+          if (cancelled) return;
+          setMessages(rows);
+          setLoading(false);
+          if (rows.length > lastCountRef.current) {
+            requestAnimationFrame(() => {
+              listRef.current?.scrollToEnd({ animated: true });
+            });
+          }
+          lastCountRef.current = rows.length;
+          if (focusedRef.current) {
+            void markConversationRead(conversationId);
+          }
+        },
+        (err) => {
+          if (cancelled) return;
+          setLoading(false);
+          showToast(err.message || 'Could not sync chat');
+        },
+      );
+    };
+
+    const cached = getCachedChatUser();
+    if (cached) {
+      // Inbox / header already warmed Firebase Auth — open the thread immediately.
+      startMessages(cached.id);
+      void ensureChatSession({
+        id: session.user.id,
+        email: session.user.email,
+        name: session.user.name,
+      }).catch(() => {
+        // Non-fatal while the live listener is already running.
+      });
+      return () => {
+        cancelled = true;
+        unsub?.();
+      };
+    }
+
     void (async () => {
       try {
         const me = await ensureChatSession({
@@ -154,29 +199,7 @@ export function ChatThreadScreen({ navigation, route }: Props) {
           name: session.user.name,
         });
         if (cancelled) return;
-        setMyId(me.id);
-        unsub = subscribeMessages(
-          conversationId,
-          (rows) => {
-            if (cancelled) return;
-            setMessages(rows);
-            setLoading(false);
-            if (rows.length > lastCountRef.current) {
-              requestAnimationFrame(() => {
-                listRef.current?.scrollToEnd({ animated: true });
-              });
-            }
-            lastCountRef.current = rows.length;
-            if (focusedRef.current) {
-              void markConversationRead(conversationId);
-            }
-          },
-          (err) => {
-            if (cancelled) return;
-            setLoading(false);
-            showToast(err.message || 'Could not sync chat');
-          },
-        );
+        startMessages(me.id);
       } catch (e) {
         if (cancelled) return;
         setLoading(false);

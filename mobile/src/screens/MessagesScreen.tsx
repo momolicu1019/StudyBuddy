@@ -14,11 +14,14 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   createGroupChat,
   ensureChatSession,
+  hideConversation,
   isChatApiConfigured,
+  leaveGroup,
   openDm,
   registerChatPushForCurrentUser,
   subscribeConversations,
   type ChatConversation,
+  type ChatFriend,
 } from '../api/chatApi';
 import { AppModal, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
@@ -48,6 +51,7 @@ export function MessagesScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
+  const [friends, setFriends] = useState<ChatFriend[]>([]);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMode, setComposeMode] = useState<ComposeMode>('dm');
   const [peerEmail, setPeerEmail] = useState('');
@@ -57,6 +61,13 @@ export function MessagesScreen({ navigation }: Props) {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+  const [pendingDelete, setPendingDelete] = useState<ChatConversation | null>(
+    null,
+  );
+  const [pendingLeave, setPendingLeave] = useState<ChatConversation | null>(
+    null,
+  );
+  const [busyAction, setBusyAction] = useState(false);
 
   const canChat = isSignedIn && !skippedLogin && Boolean(session?.user);
 
@@ -66,6 +77,7 @@ export function MessagesScreen({ navigation }: Props) {
       setLoading(false);
       setRefreshing(false);
       setConversations([]);
+      setFriends([]);
       setError('Sign in with Google or email to message other students.');
       return;
     }
@@ -73,6 +85,7 @@ export function MessagesScreen({ navigation }: Props) {
       setLoading(false);
       setRefreshing(false);
       setConversations([]);
+      setFriends([]);
       setError(
         'Firebase chat is not configured. Add EXPO_PUBLIC_FIREBASE_* to mobile/.env (see FIREBASE_CHAT.md).',
       );
@@ -94,9 +107,10 @@ export function MessagesScreen({ navigation }: Props) {
         if (cancelled) return;
         void registerChatPushForCurrentUser();
         unsub = subscribeConversations(
-          (rows) => {
+          (rows, friendRows) => {
             if (cancelled) return;
             setConversations(rows);
+            setFriends(friendRows);
             setError(null);
             setLoading(false);
             setRefreshing(false);
@@ -174,8 +188,8 @@ export function MessagesScreen({ navigation }: Props) {
     setGroupEmails((prev) => prev.filter((e) => e !== email));
   };
 
-  const startChat = async () => {
-    const email = peerEmail.trim().toLowerCase();
+  const startChat = async (emailRaw?: string) => {
+    const email = (emailRaw ?? peerEmail).trim().toLowerCase();
     if (!email) {
       showToast('Enter a classmate’s email');
       return;
@@ -216,6 +230,34 @@ export function MessagesScreen({ navigation }: Props) {
     }
   };
 
+  const confirmDeleteChat = async () => {
+    if (!pendingDelete || busyAction) return;
+    setBusyAction(true);
+    try {
+      await hideConversation(pendingDelete.id);
+      setPendingDelete(null);
+      showToast('Chat deleted');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not delete chat');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const confirmLeaveGroup = async () => {
+    if (!pendingLeave || busyAction) return;
+    setBusyAction(true);
+    try {
+      await leaveGroup(pendingLeave.id);
+      setPendingLeave(null);
+      showToast('Left group');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not leave group');
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -224,7 +266,7 @@ export function MessagesScreen({ navigation }: Props) {
     );
   }
 
-  if (error && conversations.length === 0) {
+  if (error && conversations.length === 0 && friends.length === 0) {
     return (
       <View style={styles.centerPad}>
         <Ionicons name="chatbubbles-outline" size={40} color={colors.muted} />
@@ -272,6 +314,38 @@ export function MessagesScreen({ navigation }: Props) {
         contentContainerStyle={
           conversations.length === 0 ? styles.emptyList : styles.list
         }
+        ListHeaderComponent={
+          friends.length > 0 ? (
+            <View style={styles.friendsSection}>
+              <Text style={styles.friendsTitle}>Friends</Text>
+              <Text style={styles.friendsHint}>
+                Emails from your past chats — tap to start a new message
+              </Text>
+              <View style={styles.friendsWrap}>
+                {friends.map((friend) => (
+                  <Pressable
+                    key={friend.email}
+                    style={({ pressed }) => [
+                      styles.friendChip,
+                      pressed && { opacity: 0.85 },
+                    ]}
+                    onPress={() => void startChat(friend.email)}
+                    disabled={starting}
+                  >
+                    <Ionicons
+                      name="person-outline"
+                      size={14}
+                      color={colors.primary}
+                    />
+                    <Text style={styles.friendChipText} numberOfLines={1}>
+                      {friend.email}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>No conversations yet</Text>
@@ -293,6 +367,8 @@ export function MessagesScreen({ navigation }: Props) {
             <Pressable
               style={styles.row}
               onPress={() => openThread(navigation, item)}
+              onLongPress={() => setPendingDelete(item)}
+              delayLongPress={350}
             >
               <View
                 style={[styles.avatar, isGroup && styles.avatarGroup]}
@@ -325,7 +401,22 @@ export function MessagesScreen({ navigation }: Props) {
                     (isGroup ? 'No messages yet' : item.peer.email)}
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+              {isGroup ? (
+                <Pressable
+                  onPress={() => setPendingLeave(item)}
+                  hitSlop={8}
+                  accessibilityLabel="Leave group"
+                  style={styles.leaveBtn}
+                >
+                  <Ionicons
+                    name="exit-outline"
+                    size={20}
+                    color={colors.danger}
+                  />
+                </Pressable>
+              ) : (
+                <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+              )}
             </Pressable>
           );
         }}
@@ -446,6 +537,69 @@ export function MessagesScreen({ navigation }: Props) {
           </>
         )}
       </AppModal>
+
+      <AppModal
+        visible={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+      >
+        <View style={styles.confirmWrap}>
+          <View style={styles.confirmIcon}>
+            <Ionicons name="trash-outline" size={28} color={colors.danger} />
+          </View>
+          <Text style={[styles.modalTitle, styles.confirmTitle]}>Delete this chat?</Text>
+          <Text style={styles.confirmBody}>
+            Remove
+            {pendingDelete ? ` “${pendingDelete.title}”` : ' this chat'} from
+            your inbox? You can start it again from Friends or New chat.
+          </Text>
+          <View style={styles.modalActions}>
+            <PrimaryButton
+              label="Cancel"
+              variant="secondary"
+              onPress={() => setPendingDelete(null)}
+              style={styles.modalActionBtn}
+            />
+            <PrimaryButton
+              label={busyAction ? 'Deleting…' : 'Delete'}
+              variant="danger"
+              onPress={() => void confirmDeleteChat()}
+              style={styles.modalActionBtn}
+            />
+          </View>
+        </View>
+      </AppModal>
+
+      <AppModal
+        visible={pendingLeave !== null}
+        onClose={() => setPendingLeave(null)}
+      >
+        <View style={styles.confirmWrap}>
+          <View style={styles.confirmIcon}>
+            <Ionicons name="exit-outline" size={28} color={colors.danger} />
+          </View>
+          <Text style={[styles.modalTitle, styles.confirmTitle]}>Leave this group?</Text>
+          <Text style={styles.confirmBody}>
+            Leave
+            {pendingLeave ? ` “${pendingLeave.title}”` : ' this group'}? It will
+            be removed from your chat box. Someone must invite you again to
+            rejoin.
+          </Text>
+          <View style={styles.modalActions}>
+            <PrimaryButton
+              label="Cancel"
+              variant="secondary"
+              onPress={() => setPendingLeave(null)}
+              style={styles.modalActionBtn}
+            />
+            <PrimaryButton
+              label={busyAction ? 'Leaving…' : 'Leave group'}
+              variant="danger"
+              onPress={() => void confirmLeaveGroup()}
+              style={styles.modalActionBtn}
+            />
+          </View>
+        </View>
+      </AppModal>
     </View>
   );
 }
@@ -485,6 +639,41 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', padding: 32, gap: 8 },
   emptyTitle: { fontSize: 17, fontWeight: '800', color: colors.ink },
   emptyBody: { textAlign: 'center', color: colors.muted, lineHeight: 20 },
+  friendsSection: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+    gap: 6,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.line,
+    marginBottom: 4,
+  },
+  friendsTitle: { fontSize: 15, fontWeight: '800', color: colors.ink },
+  friendsHint: { color: colors.muted, fontSize: 12, lineHeight: 17 },
+  friendsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  friendChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: '100%',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+  },
+  friendChipText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '600',
+    maxWidth: 220,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -526,6 +715,9 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
   preview: { color: colors.muted, fontSize: 13 },
+  leaveBtn: {
+    padding: 6,
+  },
   modeTabs: {
     flexDirection: 'row',
     gap: 8,
@@ -551,6 +743,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.ink,
     marginBottom: 8,
+  },
+  confirmTitle: {
+    textAlign: 'center',
   },
   modalHint: { color: colors.muted, marginBottom: 12, lineHeight: 20 },
   input: {
@@ -592,4 +787,26 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginBottom: 14,
   },
+  confirmWrap: { alignItems: 'center' },
+  confirmIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  confirmBody: {
+    color: colors.muted,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 18,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+  },
+  modalActionBtn: { flex: 1 },
 });

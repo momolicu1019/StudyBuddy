@@ -71,6 +71,9 @@ Starting a DM previously called `getDoc` on a conversation that did not exist ye
 - Groups are stored as `chatConversations` docs with `type: "group"` (auto-generated ids)
 - Open a group and tap the pencil in the header to **rename** it — any member can update the name
 - Open a group and tap the **person-add** icon to **invite more members** by email (membership only grows; max 20)
+- Tap the **exit** icon on a group (inbox row or thread header) to **leave** — confirms first, then removes you from the group and your inbox
+- Long-press any conversation in the inbox to **delete** it from your chat box (soft-hide; reopen from Friends / New chat)
+- The **Friends** list at the top of Messages shows emails from past chats — tap one to start a DM
 - The inbox and group thread header show the current **member count**
 - Republish `firestore.rules` after pulling this update — older rules only allow 2-member DMs / title-only group edits
 

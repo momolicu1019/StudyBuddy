@@ -9,6 +9,12 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
+    // Conversation ids are `{uidA}_{uidB}` with Firebase UIDs (no underscores).
+    function uidInConversationId(conversationId) {
+      return conversationId.matches('^' + request.auth.uid + '_.+')
+        || conversationId.matches('^.+_' + request.auth.uid + '$');
+    }
+
     function isConversationMember(conversationId) {
       return signedIn()
         && request.auth.uid in get(/databases/$(database)/documents/chatConversations/$(conversationId)).data.memberIds;
@@ -35,10 +41,19 @@ service cloud.firestore {
     }
 
     match /chatConversations/{conversationId} {
-      allow read: if signedIn() && request.auth.uid in resource.data.memberIds;
+      // getDoc on a missing conversation used to fail with
+      // "Missing or insufficient permissions" because `resource` is null and
+      // `resource.data.memberIds` cannot be evaluated. Allow that probe only
+      // when the conversation id includes the caller's uid (new DM create path).
+      allow get: if signedIn() && (
+        (resource == null && uidInConversationId(conversationId))
+        || (resource != null && request.auth.uid in resource.data.memberIds)
+      );
+      allow list: if signedIn() && request.auth.uid in resource.data.memberIds;
       allow create: if signedIn()
         && request.auth.uid in request.resource.data.memberIds
-        && request.resource.data.memberIds.size() == 2;
+        && request.resource.data.memberIds.size() == 2
+        && uidInConversationId(conversationId);
       allow update: if isConversationMember(conversationId);
       allow delete: if false;
 

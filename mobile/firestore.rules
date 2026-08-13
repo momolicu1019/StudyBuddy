@@ -48,7 +48,9 @@ service cloud.firestore {
         && request.resource.data.email is string
         && request.resource.data.name is string
         && (!('expoPushTokens' in request.resource.data)
-            || request.resource.data.expoPushTokens is list);
+            || request.resource.data.expoPushTokens is list)
+        && (!('fcmTokens' in request.resource.data)
+            || request.resource.data.fcmTokens is list);
       allow delete: if false;
     }
 

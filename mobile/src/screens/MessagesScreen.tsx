@@ -48,7 +48,7 @@ export function MessagesScreen({ navigation }: Props) {
     if (!isChatApiConfigured()) {
       setLoading(false);
       setError(
-        'Chat server is not configured. Add EXPO_PUBLIC_CHAT_API_URL to mobile/.env',
+        'Firebase chat is not configured. Add EXPO_PUBLIC_FIREBASE_* to mobile/.env (see FIREBASE_CHAT.md).',
       );
       return;
     }

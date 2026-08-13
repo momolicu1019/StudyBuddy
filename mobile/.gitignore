@@ -34,6 +34,11 @@ yarn-error.*
 .env
 .env*.local
 
+# iOS Firebase plist (optional). Android google-services.json is committed —
+# it only has public client identifiers (Expo recommends this for FCM builds).
+# Never commit Firebase service-account private keys (FCM V1 JSON for EAS).
+GoogleService-Info.plist
+
 # typescript
 *.tsbuildinfo
 

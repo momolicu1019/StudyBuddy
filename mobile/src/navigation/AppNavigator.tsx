@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Platform,
   Pressable,
   StyleSheet,
@@ -35,6 +36,7 @@ import {
 import {
   ensureChatNotificationHandler,
   parseChatNotificationData,
+  subscribeChatPushTokenRefresh,
   type ChatNotificationData,
 } from '../api/chatNotifications';
 import { ensureNotificationChannels } from '../storage/notificationChannels';
@@ -316,6 +318,7 @@ export function AppNavigator() {
     ready && isSignedIn && !skippedLogin && Boolean(session?.user);
 
   // Local chat banners via Firestore (works like deadlines when the app is alive).
+  // Also keep the Expo push token registered so remote push can wake a killed app.
   useEffect(() => {
     if (!canChat || !session?.user || !isChatApiConfigured()) {
       stopChatIncomingWatcher();
@@ -323,6 +326,7 @@ export function AppNavigator() {
     }
 
     let cancelled = false;
+    let tokenUnsub: (() => void) | undefined;
     void (async () => {
       try {
         const me = await ensureChatSession({
@@ -333,13 +337,26 @@ export function AppNavigator() {
         if (cancelled) return;
         void registerChatPushForCurrentUser();
         startChatIncomingWatcher(me.id);
+        tokenUnsub = subscribeChatPushTokenRefresh(() => {
+          void registerChatPushForCurrentUser();
+        });
       } catch {
         if (!cancelled) stopChatIncomingWatcher();
       }
     })();
 
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        // Re-assert token + channels after returning from background/killed.
+        void registerChatPushForCurrentUser();
+        void ensureNotificationChannels();
+      }
+    });
+
     return () => {
       cancelled = true;
+      tokenUnsub?.();
+      appStateSub.remove();
       stopChatIncomingWatcher();
     };
   }, [

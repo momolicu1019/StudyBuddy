@@ -73,7 +73,7 @@ Starting a DM previously called `getDoc` on a conversation that did not exist ye
 - Open a group and tap the **person-add** icon to **invite more members** by email (membership only grows; max 20)
 - Tap the **exit** icon on a group (inbox row or thread header) to **leave** — confirms first, then removes you from the group and your inbox
 - Long-press any conversation in the inbox to **delete** it from your chat box (soft-hide; reopen from Friends / New chat)
-- The **Friends** list at the top of Messages shows emails from past chats — tap one to start a DM
+- The **Friends** dropdown beside **New group** lists emails from past chats — tap one to start a DM
 - The inbox and group thread header show the current **member count**
 - Republish `firestore.rules` after pulling this update — older rules only allow 2-member DMs / title-only group edits
 
@@ -91,15 +91,35 @@ How it works:
 3. Separately, if the recipient’s app process is alive, Firestore unread updates also trigger a **local** OS banner (same path as deadline reminders). This works even when Expo→FCM remote delivery is misconfigured
 4. Tapping the notification opens that chat thread
 
+#### Closed / force-killed apps (required setup)
+
+Local banners only work while the app process is alive. **Force-killed / swiped-away apps need remote Expo → FCM/APNs delivery.** Complete all of these, then **rebuild and reinstall**:
+
+1. **Firebase → Android app**
+   - Firebase Console → Project settings → Add app → Android
+   - Package name: `com.studybuddy.ai`
+   - Copy the Android App ID (`1:…:android:…`) into `EXPO_PUBLIC_FIREBASE_ANDROID_APP_ID` (local `.env` and EAS preview/production env)
+2. **google-services.json**
+   - The repo includes `mobile/google-services.json` (Firebase Android app for `com.studybuddy.ai`)
+   - `app.config.js` points `android.googleServicesFile` at that file
+   - If you re-download from Firebase, replace `mobile/google-services.json` (package must stay `com.studybuddy.ai`)
+3. **EAS FCM V1 credentials (Android)**
+   - Firebase Console → Project settings → Service accounts → Generate new private key
+   - `eas credentials` → Android → FCM V1 service account key → upload that JSON
+   - Or upload under [expo.dev credentials](https://expo.dev) for project `studybuddyw`
+   - This is a **private key** — never commit it to the repo (unlike `google-services.json`)
+4. **EAS APNs key (iOS)**
+   - Create an Apple Push Notifications key and upload it in EAS iOS credentials
+5. Install a **preview / production / development** build — Expo Go cannot reliably deliver killed-app chat pushes
+
 Notes:
 
 - Local banners require the recipient app to be running (foreground or background). Fully force-killed apps still need remote Expo push
 - Remote push requires a **development / preview / production** build (not reliable in Expo Go)
 - Republish `firestore.rules` so `expoPushTokens` updates are allowed
 - Android uses the `chat-messages` notification channel (created at app boot)
-- Android also needs **FCM V1 credentials** configured in EAS (`eas credentials`) for remote delivery when the app is killed
-- iOS needs an **APNs key** uploaded to the Expo project for remote delivery
 - Notification `data` values sent to Expo must be strings (booleans can break Android FCM delivery)
+- The Friends control on Messages is a dropdown next to **New group** (not inside the conversation list)
 
 ### Google Drive sync (chat backup)
 

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Pressable,
   ScrollView,
@@ -20,18 +19,10 @@ import {
   isChatApiConfigured,
   leaveGroup,
   openDm,
-  registerChatPushForCurrentUser,
   subscribeConversations,
   type ChatConversation,
   type ChatFriend,
 } from '../api/chatApi';
-import {
-  diagnoseChatPush,
-  diagnosePushNotifications,
-  sendSelfTestChatPush,
-  summarizePushDiagnostic,
-  type ChatPushDiagnosis,
-} from '../api/chatNotifications';
 import { AppModal, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
@@ -78,8 +69,6 @@ export function MessagesScreen({ navigation }: Props) {
     null,
   );
   const [busyAction, setBusyAction] = useState(false);
-  const [pushInfo, setPushInfo] = useState<ChatPushDiagnosis | null>(null);
-  const [pushTesting, setPushTesting] = useState(false);
 
   const canChat = isSignedIn && !skippedLogin && Boolean(session?.user);
 
@@ -133,25 +122,6 @@ export function MessagesScreen({ navigation }: Props) {
             setRefreshing(false);
           },
         );
-        void diagnoseChatPush().then(async (info) => {
-          if (cancelled) return;
-
-          setPushInfo(info);
-
-          if (info.expoToken) {
-            const saved = await registerChatPushForCurrentUser(
-              info.expoToken,
-            );
-
-            if (!cancelled && !saved) {
-              setPushInfo({
-                ...info,
-                error:
-                  'Push token is ready, but it could not be saved to Firestore.',
-              });
-            }
-          }
-        });
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : 'Could not load messages');
@@ -289,129 +259,6 @@ export function MessagesScreen({ navigation }: Props) {
     }
   };
 
-  const runPushSelfTest = async () => {
-    if (pushTesting) return;
-
-    setPushTesting(true);
-
-    setPushInfo((prev) => ({
-      permission: prev?.permission ?? 'unknown',
-      hasNativeToken: prev?.hasNativeToken ?? false,
-      expoToken: prev?.expoToken ?? null,
-      isExpoGo: prev?.isExpoGo ?? false,
-      error: 'Running push diagnostic (permissions → FCM → exp.host → Expo)…',
-    }));
-
-    try {
-      const diagnostic = await diagnosePushNotifications();
-      const summary = summarizePushDiagnostic(diagnostic);
-
-      const fcmOk =
-        (diagnostic.fcm as { success?: boolean } | undefined)?.success === true;
-      const expoOk =
-        (diagnostic.expo as { success?: boolean } | undefined)?.success ===
-        true;
-
-      setPushInfo((prev) => ({
-        permission: prev?.permission ?? 'unknown',
-        hasNativeToken: fcmOk,
-        expoToken: prev?.expoToken ?? null,
-        isExpoGo: prev?.isExpoGo ?? false,
-        error: summary,
-      }));
-
-      Alert.alert('Push Diagnostic', JSON.stringify(diagnostic, null, 2));
-
-      if (!fcmOk || !expoOk) {
-        showToast(
-          !fcmOk
-            ? 'FCM device token failed — see Push Diagnostic alert for the real error.'
-            : 'Expo push token failed — see Push Diagnostic alert for the real error.',
-        );
-        return;
-      }
-
-      // Tokens look healthy — continue with the existing self-test send path.
-      const info = await diagnoseChatPush();
-
-      setPushInfo({
-        ...info,
-        error: info.error || summary,
-      });
-
-      if (info.error || !info.expoToken) {
-        showToast(
-          info.error || 'Push is not ready on this install.',
-        );
-        return;
-      }
-
-      const saved = await registerChatPushForCurrentUser(
-        info.expoToken,
-      );
-
-      if (!saved) {
-        showToast(
-          'Push token is ready, but Firestore could not save it. Check sign-in / Firestore rules.',
-        );
-        return;
-      }
-
-      setPushInfo({
-        ...info,
-        error: 'Sending Expo→FCM test notification…',
-      });
-
-      const result = await sendSelfTestChatPush(
-        info.expoToken,
-      );
-
-      if (result.deliveryError) {
-        setPushInfo({
-          ...info,
-          error: result.deliveryError,
-        });
-
-        showToast(result.deliveryError);
-      } else if (result.accepted > 0) {
-        setPushInfo({
-          ...info,
-          error: null,
-        });
-
-        showToast(
-          'Push test sent successfully. Now swipe StudyBuddy away — do not Force stop it — then send a message from another account.',
-        );
-      } else {
-        setPushInfo({
-          ...info,
-          error:
-            'Expo did not accept the push notification. Check FCM credentials on EAS.',
-        });
-
-        showToast(
-          'Push test was not accepted by Expo. Check FCM credentials on EAS.',
-        );
-      }
-    } catch (e) {
-      const message =
-        e instanceof Error ? e.message : 'Push test failed';
-
-      setPushInfo((prev) => ({
-        permission: prev?.permission ?? 'unknown',
-        hasNativeToken: prev?.hasNativeToken ?? false,
-        expoToken: prev?.expoToken ?? null,
-        isExpoGo: prev?.isExpoGo ?? false,
-        error: message,
-      }));
-
-      Alert.alert('Diagnostic Error', String(e));
-      showToast(message);
-    } finally {
-      setPushTesting(false);
-    }
-  };
-
   if (loading) {
     return (
       <View style={styles.center}>
@@ -534,27 +381,6 @@ export function MessagesScreen({ navigation }: Props) {
           </View>
         ) : null}
       </View>
-
-      {canChat ? (
-        <View style={styles.pushPanel}>
-          <Text style={styles.pushTitle}>Closed-app push check</Text>
-          <Text style={styles.pushBody}>
-            {pushInfo?.isExpoGo
-              ? 'Expo Go cannot receive killed-app chat alerts. Install StudyBuddy APK v1.0.2+.'
-              : pushInfo?.error
-                ? pushInfo.error
-                : pushInfo?.expoToken
-                  ? `Ready · token …${pushInfo.expoToken.slice(-12)}`
-                  : 'Checking Expo push registration…'}
-          </Text>
-          <PrimaryButton
-            label={pushTesting ? 'Diagnosing…' : 'Test push on this phone'}
-            variant="secondary"
-            onPress={() => void runPushSelfTest()}
-            style={styles.pushTestBtn}
-          />
-        </View>
-      ) : null}
 
       <FlatList
         data={conversations}
@@ -852,20 +678,6 @@ const styles = StyleSheet.create({
   hint: { color: colors.muted, fontSize: 13 },
   toolbarActions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   actionBtn: { alignSelf: 'flex-start' },
-  pushPanel: {
-    marginHorizontal: 16,
-    marginTop: 10,
-    marginBottom: 4,
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.line,
-    backgroundColor: '#fff',
-    gap: 8,
-  },
-  pushTitle: { fontSize: 13, fontWeight: '800', color: colors.ink },
-  pushBody: { fontSize: 12, color: colors.muted, lineHeight: 17 },
-  pushTestBtn: { alignSelf: 'flex-start' },
   friendsDropdownBtn: {
     flexDirection: 'row',
     alignItems: 'center',

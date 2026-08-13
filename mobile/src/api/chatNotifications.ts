@@ -1,11 +1,10 @@
 /**
- * Expo push + local OS notifications for student chat.
+ * Local OS notifications + native FCM token helpers for student chat.
  *
- * Remote path: tokens on chatUsers; sender fans out via Expo's push API.
- * Local path: recipient shows a local banner when Firestore reports new unread
- * while this device's app process is alive (same reliability as deadlines —
- * does not require FCM/APNs). Remote push still covers fully-killed apps when
- * EAS push credentials are configured.
+ * Remote closed-app chat push is delivered by a Firebase Cloud Function
+ * (Admin SDK → FCM), not Expo Push Service. This module still uses
+ * expo-notifications for permission, Android channels, foreground banners,
+ * notification taps, and local reminders.
  */
 
 import { Platform } from 'react-native';
@@ -23,8 +22,6 @@ import {
 
 const CHANNEL_ID = CHAT_CHANNEL_ID;
 const DATA_TYPE = 'chat';
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const EXPO_RECEIPTS_URL = 'https://exp.host/--/api/v2/push/getReceipts';
 
 /** Conversation the user is currently viewing — skip local banners for it. */
 let activeConversationId: string | null = null;
@@ -64,7 +61,7 @@ export type ChatNotificationData = {
   isGroup: boolean;
 };
 
-/** String-only payload for Expo → FCM/APNs (non-strings can break Android delivery). */
+/** String-only payload for FCM/APNs data (non-strings can break Android delivery). */
 type ChatPushDataPayload = {
   type: typeof DATA_TYPE;
   conversationId: string;
@@ -132,17 +129,6 @@ export function getActiveChatConversationId(): string | null {
   return activeConversationId;
 }
 
-function easProjectId(): string | undefined {
-  const extra = Constants.expoConfig?.extra as
-    | { eas?: { projectId?: string } }
-    | undefined;
-  return (
-    extra?.eas?.projectId ||
-    Constants.easConfig?.projectId ||
-    undefined
-  );
-}
-
 async function ensurePermissionsAndChannel(): Promise<boolean> {
   if (!canUsePush()) return false;
   ensureChatNotificationHandler();
@@ -163,18 +149,37 @@ async function ensurePermissionsAndChannel(): Promise<boolean> {
   return status === 'granted';
 }
 
-/** Read the current Expo push token without prompting for permission. */
-export async function getCurrentChatPushToken(): Promise<string | null> {
-  if (!canUsePush()) return null;
+/**
+ * Get the native Android FCM registration token.
+ *
+ * This does NOT contact Expo Push Service.
+ */
+export async function getCurrentNativeFcmToken(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+
   try {
-    const current = await Notifications.getPermissionsAsync();
-    if (current.status !== 'granted') return null;
-    const projectId = easProjectId();
-    if (!projectId) return null;
-    const token = await Notifications.getExpoPushTokenAsync({ projectId });
-    const value = String(token.data || '').trim();
+    const granted = await ensurePermissionsAndChannel();
+    if (!granted) {
+      return null;
+    }
+
+    const deviceToken =
+      await Notifications.getDevicePushTokenAsync();
+
+    if (String(deviceToken.type).toLowerCase() !== 'android') {
+      return null;
+    }
+
+    const value = String(deviceToken.data || '').trim();
+
     return value || null;
-  } catch {
+  } catch (error) {
+    setLastPushDeliveryError(
+      error instanceof Error
+        ? `FCM token error: ${error.message}`
+        : 'Could not get FCM token.',
+    );
+
     return null;
   }
 }
@@ -182,7 +187,8 @@ export async function getCurrentChatPushToken(): Promise<string | null> {
 export type ChatPushDiagnosis = {
   permission: 'granted' | 'denied' | 'undetermined' | 'unknown';
   hasNativeToken: boolean;
-  expoToken: string | null;
+  /** Native FCM (Android) registration token. */
+  fcmToken: string | null;
   isExpoGo: boolean;
   error: string | null;
 };
@@ -211,35 +217,25 @@ async function withTimeout<T>(
   }
 }
 
-function explainExpoPushError(err: unknown): string {
+function explainFcmTokenError(err: unknown): string {
   const raw =
     err instanceof Error ? err.message : typeof err === 'string' ? err : '';
-  if (/UnknownHostException|Unable to resolve host|exp\.host/i.test(raw)) {
-    return (
-      'This phone cannot reach Expo (DNS failed for exp.host). ' +
-      'Switch Wi‑Fi ↔ mobile data, turn off VPN/Private DNS (or set Private DNS to Automatic), ' +
-      'forget/rejoin Wi‑Fi, then tap Test again. Without reaching exp.host, closed-app push cannot register.'
-    );
-  }
   if (/timed out|TIMEOUT/i.test(raw)) {
     return (
-      'Expo push token timed out. Check internet, Google Play Services, ' +
+      'FCM token timed out. Check internet, Google Play Services, ' +
       'notification permission, and that this APK includes google-services.json, then tap Test again.'
     );
   }
   if (/NETWORK|UNAVAILABLE|Failed to connect|ECONNREFUSED|ENOTFOUND/i.test(raw)) {
-    return (
-      'Network error talking to Expo push servers. Switch networks and retry Test push.'
-    );
+    return 'Network error while fetching the FCM token. Switch networks and retry.';
   }
-  if (raw) return `Expo push token failed: ${raw}`;
-  return 'Expo push token failed.';
+  if (raw) return `FCM token failed: ${raw}`;
+  return 'FCM token failed.';
 }
 
 /**
- * Temporary deep diagnostic: tests FCM device token and Expo push token
- * separately so we can see the real Android/Expo error (not a generic timeout).
- * Does not replace the normal registration path.
+ * Diagnostic: permissions + native FCM device token.
+ * Does not contact Expo Push Service.
  */
 export async function diagnosePushNotifications(): Promise<
   Record<string, unknown>
@@ -298,69 +294,6 @@ export async function diagnosePushNotifications(): Promise<
     };
   }
 
-  // Temporary: plain JS fetch to exp.host — isolates APK networking vs Expo-token impl.
-  try {
-    const response = await fetch('https://exp.host', {
-      method: 'GET',
-    });
-
-    results.expHostFetch = {
-      success: true,
-      status: response.status,
-      statusText: response.statusText,
-    };
-  } catch (error: unknown) {
-    const err = error as {
-      name?: string;
-      message?: string;
-      code?: string;
-    };
-    results.expHostFetch = {
-      success: false,
-      name: err?.name,
-      message: err?.message,
-      code: err?.code,
-    };
-  }
-
-  try {
-    const projectId = easProjectId();
-
-    results.expoProject = {
-      projectId: projectId || null,
-    };
-
-    if (!projectId) {
-      throw new Error('Expo project ID is missing');
-    }
-
-    const expoToken = await Notifications.getExpoPushTokenAsync({
-      projectId,
-    });
-
-    results.expo = {
-      success: true,
-      tokenLength: expoToken.data?.length ?? 0,
-      tokenPreview: expoToken.data
-        ? `${String(expoToken.data).substring(0, 20)}...`
-        : '',
-    };
-  } catch (error: unknown) {
-    const err = error as {
-      name?: string;
-      message?: string;
-      code?: string;
-      stack?: string;
-    };
-    results.expo = {
-      success: false,
-      name: err?.name,
-      message: err?.message,
-      code: err?.code,
-      stack: err?.stack,
-    };
-  }
-
   return results;
 }
 
@@ -381,13 +314,6 @@ export function summarizePushDiagnostic(
     );
   }
 
-  const expoProject = results.expoProject as
-    | { projectId?: string | null }
-    | undefined;
-  lines.push(
-    `Project ID ${expoProject?.projectId ? '✅' : '❌'} ${expoProject?.projectId ? String(expoProject.projectId).slice(0, 8) + '…' : 'missing'}`,
-  );
-
   const fcm = results.fcm as
     | {
         success?: boolean;
@@ -405,46 +331,10 @@ export function summarizePushDiagnostic(
     );
   }
 
-  const expHostFetch = results.expHostFetch as
-    | {
-        success?: boolean;
-        status?: number;
-        statusText?: string;
-        message?: string;
-        name?: string;
-        code?: string;
-      }
-    | undefined;
-  if (expHostFetch?.success) {
-    lines.push(
-      `exp.host fetch ✅ ${expHostFetch.status ?? ''} ${expHostFetch.statusText ?? ''}`.trim(),
-    );
-  } else {
-    lines.push(
-      `exp.host fetch ❌ ${[expHostFetch?.name, expHostFetch?.code, expHostFetch?.message].filter(Boolean).join(': ') || 'failed'}`,
-    );
-  }
-
-  const expo = results.expo as
-    | {
-        success?: boolean;
-        message?: string;
-        name?: string;
-        code?: string;
-      }
-    | undefined;
-  if (expo?.success) {
-    lines.push('Expo token ✅');
-  } else {
-    lines.push(
-      `Expo token ❌ ${[expo?.name, expo?.code, expo?.message].filter(Boolean).join(': ') || 'failed'}`,
-    );
-  }
-
   return lines.join('\n');
 }
 
-/** Inspect whether this install can receive closed-app Expo→FCM pushes. */
+/** Inspect whether this install can receive closed-app FCM chat pushes. */
 export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
   const isExpoGo = Constants.appOwnership === 'expo';
 
@@ -452,7 +342,7 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
     return {
       permission: 'unknown',
       hasNativeToken: false,
-      expoToken: null,
+      fcmToken: null,
       isExpoGo,
       error: 'Push is only available on iOS/Android builds.',
     };
@@ -462,7 +352,7 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
     return {
       permission: 'unknown',
       hasNativeToken: false,
-      expoToken: null,
+      fcmToken: null,
       isExpoGo: true,
       error:
         'Expo Go cannot deliver closed-app chat push. Install the StudyBuddy APK.',
@@ -485,58 +375,42 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
       return {
         permission,
         hasNativeToken: false,
-        expoToken: null,
+        fcmToken: null,
         isExpoGo: false,
         error: 'Notification permission is not granted.',
       };
     }
 
-    const projectId = easProjectId();
-
-    if (!projectId) {
-      return {
-        permission,
-        hasNativeToken: false,
-        expoToken: null,
-        isExpoGo: false,
-        error: 'Missing EAS projectId.',
-      };
-    }
-
     try {
-      // Use Expo Push Service directly.
-      // Do not call getDevicePushTokenAsync() first.
-      const token = await withTimeout(
-        Notifications.getExpoPushTokenAsync({ projectId }),
+      const fcmToken = await withTimeout(
+        getCurrentNativeFcmToken(),
         20_000,
-        'Expo push token',
+        'FCM token',
       );
 
-      const expoToken = String(token.data || '').trim() || null;
-
       return {
         permission,
-        hasNativeToken: Boolean(expoToken),
-        expoToken,
+        hasNativeToken: Boolean(fcmToken),
+        fcmToken,
         isExpoGo: false,
-        error: expoToken
+        error: fcmToken
           ? null
-          : 'Could not obtain an Expo push token on this device.',
+          : 'Could not obtain an FCM token on this device.',
       };
     } catch (e) {
       return {
         permission,
         hasNativeToken: false,
-        expoToken: null,
+        fcmToken: null,
         isExpoGo: false,
-        error: explainExpoPushError(e),
+        error: explainFcmTokenError(e),
       };
     }
   } catch (e) {
     return {
       permission: 'unknown',
       hasNativeToken: false,
-      expoToken: null,
+      fcmToken: null,
       isExpoGo: false,
       error:
         e instanceof Error ? e.message : 'Push diagnosis failed.',
@@ -545,20 +419,20 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
 }
 
 /**
- * Send a remote Expo push to THIS device (verifies FCM credentials end-to-end).
- * Prefer passing a known Expo token so we do not request another one.
+ * Verify native FCM registration for THIS device and save it to Firestore.
+ * Closed-app delivery is handled by the Cloud Function (not Expo Push).
  */
 export async function sendSelfTestChatPush(
   knownToken?: string | null,
 ): Promise<PushSendResult> {
-  let expoToken = String(knownToken || '').trim();
+  let fcmToken = String(knownToken || '').trim();
 
-  if (!expoToken) {
+  if (!fcmToken) {
     const diagnosis = await diagnoseChatPush();
 
-    if (!diagnosis.expoToken) {
+    if (!diagnosis.fcmToken) {
       const deliveryError =
-        diagnosis.error || 'No Expo push token on this device.';
+        diagnosis.error || 'No FCM token on this device.';
 
       setLastPushDeliveryError(deliveryError);
 
@@ -569,7 +443,7 @@ export async function sendSelfTestChatPush(
       };
     }
 
-    expoToken = diagnosis.expoToken;
+    fcmToken = diagnosis.fcmToken;
   }
 
   try {
@@ -577,81 +451,60 @@ export async function sendSelfTestChatPush(
       await import('./chatApi');
 
     const saved =
-      await registerChatPushForCurrentUser(expoToken);
+      await registerChatPushForCurrentUser(fcmToken);
 
     if (!saved) {
       const deliveryError =
         consumeLastPushDeliveryError() ||
-        'Got a push token but could not save it to Firestore.';
+        'Got an FCM token but could not save it to Firestore.';
 
       setLastPushDeliveryError(deliveryError);
+
+      return {
+        badTokens: [],
+        deliveryError,
+        accepted: 0,
+      };
     }
-  } catch {
-    // Still attempt the self-test using the token we already have.
+  } catch (e) {
+    const deliveryError =
+      e instanceof Error
+        ? e.message
+        : 'Could not save FCM token to Firestore.';
+    setLastPushDeliveryError(deliveryError);
+    return { badTokens: [], deliveryError, accepted: 0 };
   }
 
-  return sendChatPushNotifications({
-    tokens: [expoToken],
-    title: 'StudyBuddy push test',
-    body:
-      'If you see this, Expo→FCM works. Force-close the app, then have a classmate message you.',
-    data: {
-      type: DATA_TYPE,
+  // Local smoke test — proves channels + handler without Expo Push Service.
+  try {
+    await presentLocalChatNotification({
       conversationId: 'push-self-test',
+      title: 'StudyBuddy FCM ready',
+      body:
+        'FCM token saved. Force-close the app, then have a classmate message you.',
       peerName: 'Push test',
       peerEmail: '',
       isGroup: false,
-    },
-  });
+    });
+  } catch {
+    // ignore local banner failures
+  }
+
+  setLastPushDeliveryError(null);
+  return {
+    badTokens: [],
+    deliveryError: null,
+    accepted: 1,
+  };
 }
 
-/** Register for remote push and return the Expo push token (or null). */
+/** Register for remote push and return the native FCM token (or null). */
 export async function registerChatPushToken(): Promise<string | null> {
-  if (!canUsePush()) return null;
-
-  try {
-    const granted = await ensurePermissionsAndChannel();
-
-    if (!granted) {
-      setLastPushDeliveryError(
-        'Notification permission is off — enable it for closed-app chat alerts.',
-      );
-      return null;
-    }
-
-    const projectId = easProjectId();
-
-    if (!projectId) {
-      setLastPushDeliveryError(
-        'Missing EAS projectId — cannot register push.',
-      );
-      return null;
-    }
-
-    const token = await withTimeout(
-      Notifications.getExpoPushTokenAsync({ projectId }),
-      20_000,
-      'Expo push token',
-    );
-
-    const value = String(token.data || '').trim();
-
-    if (!value) {
-      setLastPushDeliveryError(
-        'Could not get an Expo push token on this device.',
-      );
-      return null;
-    }
-
-    return value;
-  } catch (e) {
-    setLastPushDeliveryError(explainExpoPushError(e));
-    return null;
-  }
+  return getCurrentNativeFcmToken();
 }
 
 /**
- * Keep chatUsers.expoPushTokens in sync when Expo rotates the device token
+ * Keep chatUsers.fcmTokens in sync when the native device token rotates
  * (common after reinstall / OS updates). Call once while signed in.
  */
 export function subscribeChatPushTokenRefresh(
@@ -745,222 +598,13 @@ export function parseChatNotificationData(
 }
 
 export type PushSendResult = {
-  /** Tokens Expo reported as DeviceNotRegistered (safe to drop). */
+  /** Tokens that should be dropped from the profile (unused for FCM self-test). */
   badTokens: string[];
-  /** Human-readable delivery problem (credentials, empty tokens, etc.). */
+  /** Human-readable delivery problem (permissions, empty tokens, etc.). */
   deliveryError: string | null;
-  /** How many Expo tickets accepted the message. */
+  /** How many notifications were accepted / confirmed locally. */
   accepted: number;
 };
-
-async function postExpoPush(
-  body: unknown,
-): Promise<{
-  ok: boolean;
-  tickets: Array<{
-    status?: string;
-    id?: string;
-    message?: string;
-    details?: { error?: string };
-  }>;
-}> {
-  const response = await fetch(EXPO_PUSH_URL, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Accept-Encoding': 'gzip, deflate',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    return { ok: false, tickets: [] };
-  }
-
-  const payload = (await response.json()) as {
-    data?:
-      | {
-          status?: string;
-          id?: string;
-          message?: string;
-          details?: { error?: string };
-        }
-      | Array<{
-          status?: string;
-          id?: string;
-          message?: string;
-          details?: { error?: string };
-        }>;
-  };
-
-  const tickets = Array.isArray(payload.data)
-    ? payload.data
-    : payload.data
-      ? [payload.data]
-      : [];
-
-  return { ok: true, tickets };
-}
-
-async function fetchExpoPushReceipts(
-  ids: string[],
-): Promise<
-  Record<
-    string,
-    {
-      status?: string;
-      message?: string;
-      details?: { error?: string };
-    }
-  >
-> {
-  if (ids.length === 0) return {};
-  try {
-    const response = await fetch(EXPO_RECEIPTS_URL, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ ids }),
-    });
-    if (!response.ok) return {};
-    const payload = (await response.json()) as {
-      data?: Record<
-        string,
-        {
-          status?: string;
-          message?: string;
-          details?: { error?: string };
-        }
-      >;
-    };
-    return payload.data && typeof payload.data === 'object' ? payload.data : {};
-  } catch {
-    return {};
-  }
-}
-
-function describePushError(code: string, fallback?: string): string {
-  if (/InvalidCredentials|InvalidProviderToken/i.test(code)) {
-    return 'Expo→FCM credentials invalid. Re-upload FCM V1 on EAS and ensure the service account has Firebase Cloud Messaging API Admin.';
-  }
-  if (/DeviceNotRegistered/i.test(code)) {
-    return 'Recipient push token expired — they should open StudyBuddy once on the latest APK.';
-  }
-  if (/MessageTooBig/i.test(code)) {
-    return 'Chat push was too large to deliver.';
-  }
-  if (/MessageRateExceeded/i.test(code)) {
-    return 'Chat push rate-limited by Expo — try again shortly.';
-  }
-  return fallback || code || 'Chat push delivery failed.';
-}
-
-/** Fan-out Expo push notifications to recipient tokens (best-effort). */
-export async function sendChatPushNotifications(input: {
-  tokens: string[];
-  title: string;
-  body: string;
-  data: ChatNotificationData;
-}): Promise<PushSendResult> {
-  const tokens = Array.from(
-    new Set(
-      (input.tokens || [])
-        .map((t) => String(t || '').trim())
-        .filter(Boolean),
-    ),
-  );
-  if (tokens.length === 0) {
-    const deliveryError =
-      'Recipient has no push token — they must open the latest StudyBuddy APK once while signed in.';
-    setLastPushDeliveryError(deliveryError);
-    return { badTokens: [], deliveryError, accepted: 0 };
-  }
-
-  const data = toPushData(input.data);
-  const ttlSeconds = 60 * 60 * 24;
-  // Omit channelId so Android can still show the alert if the custom
-  // chat-messages channel was wiped (clear-data). Local banners still use
-  // CHANNEL_ID. Expo will use/create the default channel for remote pushes.
-  const messages = tokens.map((to) => ({
-    to,
-    sound: 'default' as const,
-    title: input.title,
-    body: input.body.slice(0, 180),
-    data,
-    priority: 'high' as const,
-    ttl: ttlSeconds,
-    expiration: Math.floor(Date.now() / 1000) + ttlSeconds,
-  }));
-
-  const badTokens: string[] = [];
-  const ticketIds: string[] = [];
-  let accepted = 0;
-  let deliveryError: string | null = null;
-
-  try {
-    const chunkSize = 100;
-    for (let i = 0; i < messages.length; i += chunkSize) {
-      const chunk = messages.slice(i, i + chunkSize);
-      const body = chunk.length === 1 ? chunk[0] : chunk;
-
-      let result = await postExpoPush(body);
-      // One quick retry for transient network / 5xx style failures.
-      if (!result.ok) {
-        await new Promise((r) => setTimeout(r, 400));
-        result = await postExpoPush(body);
-      }
-      if (!result.ok) {
-        deliveryError = 'Could not reach Expo push service.';
-        continue;
-      }
-
-      result.tickets.forEach((ticket, index) => {
-        if (!ticket) return;
-        if (ticket.status === 'ok' && ticket.id) {
-          accepted += 1;
-          ticketIds.push(ticket.id);
-          return;
-        }
-        if (ticket.status !== 'error') return;
-        const err = ticket.details?.error || ticket.message || '';
-        deliveryError = describePushError(err, ticket.message);
-        if (/DeviceNotRegistered/i.test(err)) {
-          const token = chunk[index]?.to;
-          if (token) badTokens.push(token);
-        }
-      });
-    }
-
-    // Receipts reveal FCM/APNs handoff errors that tickets do not (e.g. InvalidCredentials).
-    if (ticketIds.length > 0) {
-      await new Promise((r) => setTimeout(r, 1200));
-      const receipts = await fetchExpoPushReceipts(ticketIds);
-      for (const receipt of Object.values(receipts)) {
-        if (!receipt || receipt.status !== 'error') continue;
-        const err = receipt.details?.error || receipt.message || '';
-        deliveryError = describePushError(err, receipt.message);
-        if (/DeviceNotRegistered/i.test(err)) {
-          // Receipts are not aligned 1:1 with token index — prune happens on next ticket error.
-        }
-      }
-    }
-  } catch {
-    // Never block sending a chat message on push delivery.
-    deliveryError = deliveryError || 'Chat push failed unexpectedly.';
-  }
-
-  if (deliveryError) setLastPushDeliveryError(deliveryError);
-  else if (accepted > 0) setLastPushDeliveryError(null);
-
-  return {
-    badTokens: Array.from(new Set(badTokens)),
-    deliveryError,
-    accepted,
-  };
-}
 
 /**
  * Show a local OS notification for an incoming chat message.

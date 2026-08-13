@@ -72,8 +72,13 @@ type UserDoc = {
   email: string;
   name: string;
   localAuthId: string;
-  /** Expo push tokens for this chat user (multi-device). */
+
+  /** Native Android FCM registration tokens. */
+  fcmTokens?: string[];
+
+  /** Kept temporarily for iOS/legacy Expo registrations. */
   expoPushTokens?: string[];
+
   updatedAt?: unknown;
 };
 
@@ -297,8 +302,8 @@ export async function clearChatSession(): Promise<void> {
     const uid = auth.currentUser?.uid;
     if (uid) {
       try {
-        const { getCurrentChatPushToken } = await import('./chatNotifications');
-        const token = await getCurrentChatPushToken();
+        const { getCurrentNativeFcmToken } = await import('./chatNotifications');
+        const token = await getCurrentNativeFcmToken();
         if (token) await unregisterChatPushToken(token);
       } catch {
         // ignore push cleanup failures on sign-out
@@ -310,106 +315,94 @@ export async function clearChatSession(): Promise<void> {
   }
 }
 
-/** Persist this device's Expo push token on the signed-in chat profile. */
+/** Register this Android device's native FCM token. */
 export async function registerChatPushForCurrentUser(
   knownToken?: string | null,
 ): Promise<boolean> {
   if (!isChatApiConfigured()) return false;
+
   try {
     const uid = await requireUid();
     const auth = getFirebaseAuth();
-    const { registerChatPushToken, ensureChatNotificationHandler } =
-      await import('./chatNotifications');
+
+    const {
+      getCurrentNativeFcmToken,
+      ensureChatNotificationHandler,
+    } = await import('./chatNotifications');
+
     ensureChatNotificationHandler();
-    // Prefer a token we already fetched — avoid concurrent Expo token
-    // requests that can time out or leave Firestore empty.
+
     const provided = String(knownToken || '').trim();
-    const token = provided || (await registerChatPushToken());
+
+    const token =
+      provided || (await getCurrentNativeFcmToken());
+
     if (!token) return false;
 
     const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
     const snap = await getDoc(userRef);
-    const existingDoc = snap.exists() ? (snap.data() as UserDoc) : null;
-    const existing = existingDoc?.expoPushTokens || [];
-    const next = Array.from(new Set([token, ...existing])).slice(
-      0,
-      MAX_PUSH_TOKENS,
-    );
+
+    const existingDoc = snap.exists()
+      ? (snap.data() as UserDoc)
+      : null;
+
+    const existing = existingDoc?.fcmTokens || [];
+
+    const next = Array.from(
+      new Set([token, ...existing]),
+    ).slice(0, MAX_PUSH_TOKENS);
+
     const email =
       existingDoc?.email ||
       auth.currentUser?.email ||
       '';
+
     const name =
       existingDoc?.name ||
       auth.currentUser?.displayName ||
       email ||
       'Student';
 
-    if (
-      next.length === existing.length &&
-      next.every((t, i) => t === existing[i])
-    ) {
-      return true;
-    }
-    // Include email/name so Firestore rules that require those fields still pass
-    // even if the profile doc was partial.
     await setDoc(
       userRef,
       {
-        email: String(email || 'unknown@studybuddy.local'),
+        email: String(
+          email || 'unknown@studybuddy.local',
+        ),
         name: String(name || 'Student'),
         localAuthId:
           existingDoc?.localAuthId ||
           auth.currentUser?.uid ||
           uid,
-        expoPushTokens: next,
+
+        fcmTokens: next,
+
         updatedAt: serverTimestamp(),
       },
       { merge: true },
     );
+
     return true;
   } catch (e) {
     try {
-      const { reportChatPushDeliveryError } = await import('./chatNotifications');
+      const {
+        reportChatPushDeliveryError,
+      } = await import('./chatNotifications');
+
       reportChatPushDeliveryError(
         e instanceof Error
-          ? `Could not save push token to Firestore: ${e.message}`
-          : 'Could not save push token to Firestore.',
+          ? `Could not save FCM token: ${e.message}`
+          : 'Could not save FCM token.',
       );
     } catch {
       // ignore
     }
+
     return false;
   }
 }
 
-/** Drop invalid Expo tokens from a chat profile (best-effort). */
-async function pruneChatPushTokens(
-  memberId: string,
-  badTokens: string[],
-): Promise<void> {
-  const remove = new Set(
-    badTokens.map((t) => String(t || '').trim()).filter(Boolean),
-  );
-  if (remove.size === 0) return;
-  try {
-    const userRef = doc(getFirestoreDb(), 'chatUsers', memberId);
-    const snap = await getDoc(userRef);
-    if (!snap.exists()) return;
-    const existing = (snap.data() as UserDoc).expoPushTokens || [];
-    const next = existing.filter((t) => !remove.has(t));
-    if (next.length === existing.length) return;
-    await setDoc(
-      userRef,
-      { expoPushTokens: next, updatedAt: serverTimestamp() },
-      { merge: true },
-    );
-  } catch {
-    // ignore prune failures
-  }
-}
-
-/** Remove a device token from the current chat profile (e.g. on sign-out). */
+/** Remove a device FCM token from the current chat profile (e.g. on sign-out). */
 export async function unregisterChatPushToken(token: string): Promise<void> {
   const value = token.trim();
   if (!value || !isChatApiConfigured()) return;
@@ -418,13 +411,13 @@ export async function unregisterChatPushToken(token: string): Promise<void> {
     const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
     const snap = await getDoc(userRef);
     if (!snap.exists()) return;
-    const existing = (snap.data() as UserDoc).expoPushTokens || [];
+    const existing = (snap.data() as UserDoc).fcmTokens || [];
     const next = existing.filter((t) => t !== value);
     if (next.length === existing.length) return;
     await setDoc(
       userRef,
       {
-        expoPushTokens: next,
+        fcmTokens: next,
         updatedAt: serverTimestamp(),
       },
       { merge: true },
@@ -1137,12 +1130,10 @@ export async function sendMessage(
     // remote listeners receive a concrete createdAt (serverTimestamp is null
     // until the write resolves, which can delay remote ordering).
     const createdAt = Timestamp.now();
-    const unreadBeforeByMember: Record<string, number> = {};
     const unreadUpdate: Record<string, number> = { ...(conv.unread || {}) };
     for (const memberId of conv.memberIds || []) {
-      unreadBeforeByMember[memberId] = Number(unreadUpdate[memberId] || 0);
       if (memberId === uid) unreadUpdate[memberId] = 0;
-      else unreadUpdate[memberId] = unreadBeforeByMember[memberId] + 1;
+      else unreadUpdate[memberId] = Number(unreadUpdate[memberId] || 0) + 1;
     }
 
     const batch = writeBatch(db);
@@ -1158,24 +1149,6 @@ export async function sendMessage(
     });
     await batch.commit();
 
-    // Push notify other members (best-effort; never fail the send).
-    // Wait long enough for Expo tickets + receipts so closed-app delivery
-    // errors (InvalidCredentials, empty tokens) can surface to the sender.
-    try {
-      await Promise.race([
-        notifyConversationMembers({
-          conversationId,
-          conv,
-          senderId: uid,
-          body,
-          unreadBeforeByMember,
-        }),
-        new Promise<void>((resolve) => setTimeout(resolve, 4500)),
-      ]);
-    } catch {
-      // ignore push failures
-    }
-
     return {
       id: messageRef.id,
       conversation_id: conversationId,
@@ -1185,70 +1158,6 @@ export async function sendMessage(
     };
   } catch (err) {
     throw mapChatError(err, 'Could not send message');
-  }
-}
-
-async function notifyConversationMembers(input: {
-  conversationId: string;
-  conv: ConversationDoc;
-  senderId: string;
-  body: string;
-  unreadBeforeByMember: Record<string, number>;
-}): Promise<void> {
-  try {
-    const {
-      chatNotificationTitle,
-      sendChatPushNotifications,
-      consumeLastPushDeliveryError,
-    } = await import('./chatNotifications');
-    // Clear any stale registration error before fan-out.
-    consumeLastPushDeliveryError();
-
-    const isGroup = input.conv.type === 'group';
-    const senderName =
-      input.conv.members?.[input.senderId]?.name?.trim() || 'Student';
-    const groupTitle =
-      (input.conv.title || 'Group chat').trim() || 'Group chat';
-    const fromLabel = isGroup ? groupTitle : senderName;
-    const peerEmail = isGroup
-      ? `${(input.conv.memberIds || []).length} members`
-      : input.conv.members?.[input.senderId]?.email || '';
-
-    const recipientIds = (input.conv.memberIds || []).filter(
-      (id) => id !== input.senderId,
-    );
-    if (recipientIds.length === 0) return;
-
-    const db = getFirestoreDb();
-    for (const memberId of recipientIds) {
-      try {
-        const snap = await getDoc(doc(db, 'chatUsers', memberId));
-        if (!snap.exists()) continue;
-        const memberTokens = (snap.data() as UserDoc).expoPushTokens || [];
-        const unreadBefore = Number(
-          input.unreadBeforeByMember[memberId] || 0,
-        );
-        const result = await sendChatPushNotifications({
-          tokens: memberTokens,
-          title: chatNotificationTitle(fromLabel, unreadBefore),
-          body: input.body,
-          data: {
-            type: 'chat',
-            conversationId: input.conversationId,
-            peerName: fromLabel,
-            peerEmail,
-            isGroup,
-          },
-        });
-        if (result.badTokens.length > 0) {
-          void pruneChatPushTokens(memberId, result.badTokens);
-        }
-      } catch {
-        // skip members we cannot notify
-      }
-    }
-  } catch {
-    // ignore push failures
   }
 }
 

@@ -24,6 +24,7 @@ import {
 const CHANNEL_ID = CHAT_CHANNEL_ID;
 const DATA_TYPE = 'chat';
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+const EXPO_RECEIPTS_URL = 'https://exp.host/--/api/v2/push/getReceipts';
 
 /** Conversation the user is currently viewing — skip local banners for it. */
 let activeConversationId: string | null = null;
@@ -32,6 +33,23 @@ let activeConversationId: string | null = null;
 const recentNotifyKeys = new Map<string, number>();
 const DEDUPE_MS = 20_000;
 let suppressorReady = false;
+
+/** Last remote-push delivery problem (for a short toast on the sender). */
+let lastPushDeliveryError: string | null = null;
+
+export function consumeLastPushDeliveryError(): string | null {
+  const value = lastPushDeliveryError;
+  lastPushDeliveryError = null;
+  return value;
+}
+
+export function peekLastPushDeliveryError(): string | null {
+  return lastPushDeliveryError;
+}
+
+function setLastPushDeliveryError(message: string | null): void {
+  lastPushDeliveryError = message ? String(message).slice(0, 180) : null;
+}
 
 export type ChatNotificationData = {
   type: typeof DATA_TYPE;
@@ -161,17 +179,54 @@ export async function registerChatPushToken(): Promise<string | null> {
   if (!canUsePush()) return null;
   try {
     const granted = await ensurePermissionsAndChannel();
-    if (!granted) return null;
+    if (!granted) {
+      setLastPushDeliveryError(
+        'Notification permission is off — enable it for closed-app chat alerts.',
+      );
+      return null;
+    }
 
     const projectId = easProjectId();
-    if (!projectId) return null;
+    if (!projectId) {
+      setLastPushDeliveryError('Missing EAS projectId — cannot register push.');
+      return null;
+    }
+
+    // Native FCM/APNs token must exist before Expo can deliver to a killed app.
+    // If this throws, google-services.json / FCM is missing from this binary.
+    try {
+      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      const native = String(
+        typeof deviceToken === 'string'
+          ? deviceToken
+          : (deviceToken as { data?: string })?.data || '',
+      ).trim();
+      if (!native) {
+        setLastPushDeliveryError(
+          'No FCM device token — install the latest StudyBuddy APK (not Expo Go).',
+        );
+        return null;
+      }
+    } catch {
+      setLastPushDeliveryError(
+        'FCM not ready on this install — reinstall the latest APK from GitHub Releases.',
+      );
+      return null;
+    }
 
     const token = await Notifications.getExpoPushTokenAsync({ projectId });
     const value = String(token.data || '').trim();
-    return value || null;
+    if (!value) {
+      setLastPushDeliveryError('Could not get an Expo push token on this device.');
+      return null;
+    }
+    return value;
   } catch {
     // Simulator / Expo Go / missing credentials — chat still works without push.
     // Local Firestore-driven banners still notify when the app process is alive.
+    setLastPushDeliveryError(
+      'Push registration failed — closed-app chat alerts may not work on this install.',
+    );
     return null;
   }
 }
@@ -273,6 +328,10 @@ export function parseChatNotificationData(
 export type PushSendResult = {
   /** Tokens Expo reported as DeviceNotRegistered (safe to drop). */
   badTokens: string[];
+  /** Human-readable delivery problem (credentials, empty tokens, etc.). */
+  deliveryError: string | null;
+  /** How many Expo tickets accepted the message. */
+  accepted: number;
 };
 
 async function postExpoPush(
@@ -281,6 +340,7 @@ async function postExpoPush(
   ok: boolean;
   tickets: Array<{
     status?: string;
+    id?: string;
     message?: string;
     details?: { error?: string };
   }>;
@@ -303,11 +363,13 @@ async function postExpoPush(
     data?:
       | {
           status?: string;
+          id?: string;
           message?: string;
           details?: { error?: string };
         }
       | Array<{
           status?: string;
+          id?: string;
           message?: string;
           details?: { error?: string };
         }>;
@@ -320,6 +382,61 @@ async function postExpoPush(
       : [];
 
   return { ok: true, tickets };
+}
+
+async function fetchExpoPushReceipts(
+  ids: string[],
+): Promise<
+  Record<
+    string,
+    {
+      status?: string;
+      message?: string;
+      details?: { error?: string };
+    }
+  >
+> {
+  if (ids.length === 0) return {};
+  try {
+    const response = await fetch(EXPO_RECEIPTS_URL, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ids }),
+    });
+    if (!response.ok) return {};
+    const payload = (await response.json()) as {
+      data?: Record<
+        string,
+        {
+          status?: string;
+          message?: string;
+          details?: { error?: string };
+        }
+      >;
+    };
+    return payload.data && typeof payload.data === 'object' ? payload.data : {};
+  } catch {
+    return {};
+  }
+}
+
+function describePushError(code: string, fallback?: string): string {
+  if (/InvalidCredentials|InvalidProviderToken/i.test(code)) {
+    return 'Expo→FCM credentials invalid. Re-upload FCM V1 on EAS and ensure the service account has Firebase Cloud Messaging API Admin.';
+  }
+  if (/DeviceNotRegistered/i.test(code)) {
+    return 'Recipient push token expired — they should open StudyBuddy once on the latest APK.';
+  }
+  if (/MessageTooBig/i.test(code)) {
+    return 'Chat push was too large to deliver.';
+  }
+  if (/MessageRateExceeded/i.test(code)) {
+    return 'Chat push rate-limited by Expo — try again shortly.';
+  }
+  return fallback || code || 'Chat push delivery failed.';
 }
 
 /** Fan-out Expo push notifications to recipient tokens (best-effort). */
@@ -336,28 +453,33 @@ export async function sendChatPushNotifications(input: {
         .filter(Boolean),
     ),
   );
-  if (tokens.length === 0) return { badTokens: [] };
+  if (tokens.length === 0) {
+    const deliveryError =
+      'Recipient has no push token — they must open the latest StudyBuddy APK once while signed in.';
+    setLastPushDeliveryError(deliveryError);
+    return { badTokens: [], deliveryError, accepted: 0 };
+  }
 
   const data = toPushData(input.data);
   const ttlSeconds = 60 * 60 * 24;
+  // Omit channelId so Android can still show the alert if the custom
+  // chat-messages channel was wiped (clear-data). Local banners still use
+  // CHANNEL_ID. Expo will use/create the default channel for remote pushes.
   const messages = tokens.map((to) => ({
     to,
     sound: 'default' as const,
     title: input.title,
     body: input.body.slice(0, 180),
     data,
-    channelId: CHANNEL_ID,
     priority: 'high' as const,
-    // Prefer waking the device; ignored on platforms that don't support it.
-    _contentAvailable: true,
-    // Keep the push deliverable if the device was briefly offline.
     ttl: ttlSeconds,
     expiration: Math.floor(Date.now() / 1000) + ttlSeconds,
-    // iOS: show as an alert even when Focus / delivery coalescing applies.
-    interruptionLevel: 'timeSensitive' as const,
   }));
 
   const badTokens: string[] = [];
+  const ticketIds: string[] = [];
+  let accepted = 0;
+  let deliveryError: string | null = null;
 
   try {
     const chunkSize = 100;
@@ -371,25 +493,54 @@ export async function sendChatPushNotifications(input: {
         await new Promise((r) => setTimeout(r, 400));
         result = await postExpoPush(body);
       }
-      if (!result.ok) continue;
+      if (!result.ok) {
+        deliveryError = 'Could not reach Expo push service.';
+        continue;
+      }
 
       result.tickets.forEach((ticket, index) => {
-        if (!ticket || ticket.status !== 'error') return;
+        if (!ticket) return;
+        if (ticket.status === 'ok' && ticket.id) {
+          accepted += 1;
+          ticketIds.push(ticket.id);
+          return;
+        }
+        if (ticket.status !== 'error') return;
         const err = ticket.details?.error || ticket.message || '';
-        // Only prune per-device invalid tokens. Project credential errors
-        // (InvalidCredentials / InvalidProviderToken) must NOT wipe tokens —
-        // those are EAS/FCM setup issues and the same Expo token stays valid.
+        deliveryError = describePushError(err, ticket.message);
         if (/DeviceNotRegistered/i.test(err)) {
           const token = chunk[index]?.to;
           if (token) badTokens.push(token);
         }
       });
     }
+
+    // Receipts reveal FCM/APNs handoff errors that tickets do not (e.g. InvalidCredentials).
+    if (ticketIds.length > 0) {
+      await new Promise((r) => setTimeout(r, 1200));
+      const receipts = await fetchExpoPushReceipts(ticketIds);
+      for (const receipt of Object.values(receipts)) {
+        if (!receipt || receipt.status !== 'error') continue;
+        const err = receipt.details?.error || receipt.message || '';
+        deliveryError = describePushError(err, receipt.message);
+        if (/DeviceNotRegistered/i.test(err)) {
+          // Receipts are not aligned 1:1 with token index — prune happens on next ticket error.
+        }
+      }
+    }
   } catch {
     // Never block sending a chat message on push delivery.
+    deliveryError = deliveryError || 'Chat push failed unexpectedly.';
   }
 
-  return { badTokens: Array.from(new Set(badTokens)) };
+  if (deliveryError) setLastPushDeliveryError(deliveryError);
+  else if (accepted > 0) setLastPushDeliveryError(null);
+
+  return {
+    badTokens: Array.from(new Set(badTokens)),
+    deliveryError,
+    accepted,
+  };
 }
 
 /**

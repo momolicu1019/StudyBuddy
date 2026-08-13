@@ -28,7 +28,7 @@ import {
   updateGroupTitle,
   type ChatMessage,
 } from '../api/chatApi';
-import { setActiveChatConversationId } from '../api/chatNotifications';
+import { setActiveChatConversationId, consumeLastPushDeliveryError } from '../api/chatNotifications';
 import { AppModal, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
@@ -245,6 +245,11 @@ export function ChatThreadScreen({ navigation, route }: Props) {
       requestAnimationFrame(() => {
         listRef.current?.scrollToEnd({ animated: true });
       });
+      const pushErr = consumeLastPushDeliveryError();
+      if (pushErr) {
+        // Helpful when closed-app remote push fails (credentials / missing token).
+        showToast(pushErr);
+      }
     } catch (e) {
       setInput(body);
       showToast(e instanceof Error ? e.message : 'Could not send');

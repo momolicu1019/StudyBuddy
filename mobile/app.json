@@ -25,6 +25,7 @@
     },
     "android": {
       "package": "com.studybuddy.ai",
+      "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#6C63FF",

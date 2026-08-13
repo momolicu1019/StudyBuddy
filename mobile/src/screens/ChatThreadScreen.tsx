@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   ensureChatSession,
   markConversationRead,
+  registerChatPushForCurrentUser,
   sendMessage,
   subscribeMessages,
   updateGroupTitle,
@@ -163,6 +164,12 @@ export function ChatThreadScreen({ navigation, route }: Props) {
     };
   }, []);
 
+  // Refresh push token while chatting so recipients stay reachable.
+  useEffect(() => {
+    if (!session?.user) return;
+    void registerChatPushForCurrentUser();
+  }, [session?.user?.id]);
+
   const onSend = async () => {
     const body = input.trim();
     if (!body || sending) return;
@@ -219,9 +226,12 @@ export function ChatThreadScreen({ navigation, route }: Props) {
     );
   }
 
-  // Stack screen has no tab bar; lift by full keyboard height on Android.
-  const iosOffset = headerHeight + 12;
-  const androidLift = keyboardHeight > 0 ? keyboardHeight : 0;
+  // Stack screen has no tab bar. Lift a bit past the raw keyboard height so the
+  // composer + Send button clear gesture bars / nav gaps.
+  const KEYBOARD_EXTRA_GAP = 28;
+  const iosOffset = headerHeight + KEYBOARD_EXTRA_GAP;
+  const androidLift =
+    keyboardHeight > 0 ? keyboardHeight + KEYBOARD_EXTRA_GAP : 0;
 
   return (
     <KeyboardAvoidingView
@@ -240,6 +250,7 @@ export function ChatThreadScreen({ navigation, route }: Props) {
       >
         <FlatList
           ref={listRef}
+          style={styles.listFlex}
           data={messages}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
@@ -277,7 +288,7 @@ export function ChatThreadScreen({ navigation, route }: Props) {
             styles.composer,
             {
               paddingBottom: keyboardVisible
-                ? 10
+                ? KEYBOARD_EXTRA_GAP
                 : Math.max(insets.bottom, 10),
             },
           ]}
@@ -335,6 +346,7 @@ export function ChatThreadScreen({ navigation, route }: Props) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
+  listFlex: { flex: 1 },
   center: {
     flex: 1,
     alignItems: 'center',

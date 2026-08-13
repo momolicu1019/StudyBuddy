@@ -111,9 +111,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     void (async () => {
       try {
+        const { ensureChatNotificationHandler } = await import(
+          '../api/chatNotifications'
+        );
         const { ensureDeadlineNotificationHandler, syncDeadlineNotifications } =
           await import('../storage/deadlineNotifications');
+        // Chat handler last so foreground message pushes keep sound + badge.
         ensureDeadlineNotificationHandler();
+        ensureChatNotificationHandler();
         const deadlines = await api.getDeadlines();
         if (!cancelled) {
           await syncDeadlineNotifications(deadlines);

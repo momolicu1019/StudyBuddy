@@ -88,6 +88,8 @@ How it works:
 Notes:
 
 - Push requires a **development / preview / production** build (not reliable in Expo Go for all devices)
+- Android needs **FCM V1 credentials** uploaded in EAS (`eas credentials`); iOS needs an APNs key
+- Both students must allow notifications when prompted so tokens are saved on `chatUsers/{uid}.expoPushTokens`
 - Republish `firestore.rules` so `expoPushTokens` updates are allowed
 - Android uses the `chat-messages` notification channel
 

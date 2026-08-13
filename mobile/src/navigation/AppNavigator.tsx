@@ -29,7 +29,8 @@ import {
   subscribeUnreadTotal,
 } from '../api/chatApi';
 import {
-  isChatNotificationResponse,
+  ensureChatNotificationHandler,
+  parseChatNotificationData,
   type ChatNotificationData,
 } from '../api/chatNotifications';
 import { AboutModal } from '../screens/AboutModal';
@@ -66,8 +67,26 @@ function openChatFromNotification(data: ChatNotificationData) {
     conversationId: data.conversationId,
     peerName: data.peerName || 'Chat',
     peerEmail: data.peerEmail || '',
-    isGroup: Boolean(data.isGroup),
+    isGroup: data.isGroup === true,
   });
+}
+
+function notificationDataFromResponse(raw: unknown): unknown {
+  if (raw && typeof raw === 'object') {
+    const record = raw as Record<string, unknown>;
+    // Some Android builds expose the payload as `dataString` instead of `data`.
+    if (
+      (record.data == null || Object.keys(record.data as object).length === 0) &&
+      typeof record.dataString === 'string'
+    ) {
+      try {
+        return JSON.parse(record.dataString);
+      } catch {
+        return raw;
+      }
+    }
+  }
+  return raw;
 }
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -289,13 +308,16 @@ export function AppNavigator() {
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
+    // Ensure foreground banners work even before Messages is opened.
+    ensureChatNotificationHandler();
 
     const handleResponseData = (data: unknown) => {
-      if (isChatNotificationResponse(data)) {
+      const chat = parseChatNotificationData(notificationDataFromResponse(data));
+      if (chat) {
         if (navigationRef.isReady() && !showLogin) {
-          openChatFromNotification(data);
+          openChatFromNotification(chat);
         } else {
-          pendingChatTap.current = data;
+          pendingChatTap.current = chat;
         }
         return;
       }
@@ -310,12 +332,25 @@ export function AppNavigator() {
 
     const responseSub = Notifications.addNotificationResponseReceivedListener(
       (response) => {
-        handleResponseData(response.notification.request.content.data);
+        const content = response.notification.request.content as {
+          data?: unknown;
+          dataString?: string;
+        };
+        handleResponseData(
+          content.data ??
+            (content.dataString ? { dataString: content.dataString } : null),
+        );
       },
     );
 
     void Notifications.getLastNotificationResponseAsync().then((response) => {
-      handleResponseData(response?.notification.request.content.data);
+      const content = response?.notification.request.content as
+        | { data?: unknown; dataString?: string }
+        | undefined;
+      handleResponseData(
+        content?.data ??
+          (content?.dataString ? { dataString: content.dataString } : null),
+      );
     });
 
     return () => {

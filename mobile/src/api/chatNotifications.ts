@@ -298,6 +298,31 @@ export async function diagnosePushNotifications(): Promise<
     };
   }
 
+  // Temporary: plain JS fetch to exp.host — isolates APK networking vs Expo-token impl.
+  try {
+    const response = await fetch('https://exp.host', {
+      method: 'GET',
+    });
+
+    results.expHostFetch = {
+      success: true,
+      status: response.status,
+      statusText: response.statusText,
+    };
+  } catch (error: unknown) {
+    const err = error as {
+      name?: string;
+      message?: string;
+      code?: string;
+    };
+    results.expHostFetch = {
+      success: false,
+      name: err?.name,
+      message: err?.message,
+      code: err?.code,
+    };
+  }
+
   try {
     const projectId = easProjectId();
 
@@ -377,6 +402,26 @@ export function summarizePushDiagnostic(
   } else {
     lines.push(
       `FCM token ❌ ${[fcm?.name, fcm?.code, fcm?.message].filter(Boolean).join(': ') || 'failed'}`,
+    );
+  }
+
+  const expHostFetch = results.expHostFetch as
+    | {
+        success?: boolean;
+        status?: number;
+        statusText?: string;
+        message?: string;
+        name?: string;
+        code?: string;
+      }
+    | undefined;
+  if (expHostFetch?.success) {
+    lines.push(
+      `exp.host fetch ✅ ${expHostFetch.status ?? ''} ${expHostFetch.statusText ?? ''}`.trim(),
+    );
+  } else {
+    lines.push(
+      `exp.host fetch ❌ ${[expHostFetch?.name, expHostFetch?.code, expHostFetch?.message].filter(Boolean).join(': ') || 'failed'}`,
     );
   }
 

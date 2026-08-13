@@ -66,7 +66,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const showToast = useCallback((message: string) => {
     setToast({ message, visible: true });
-    setTimeout(() => setToast((t) => ({ ...t, visible: false })), 2200);
+    const ms = message.length > 80 ? 5200 : 2200;
+    setTimeout(() => setToast((t) => ({ ...t, visible: false })), ms);
   }, []);
 
   const applySubjectUpdate = useCallback((subject: Subject) => {

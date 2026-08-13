@@ -112,13 +112,17 @@ Local banners only work while the app process is alive. **Force-killed / swiped-
    - Create an Apple Push Notifications key and upload it in EAS iOS credentials
 5. Install a **new** preview/production APK from the latest GitHub Release / EAS build — Expo Go cannot deliver killed-app chat pushes
 6. Open StudyBuddy **once** while signed in (registers the Expo push token), then force-close and test
+7. On **Messages**, use **Test push on this phone** — you should see a banner immediately. If you get an error toast, fix that first (usually FCM V1 on EAS / wrong APK)
 
 #### Still not getting closed-app alerts?
 
-1. Confirm both phones use the **latest APK** built after `google-services.json` + FCM V1 were added
-2. On the **recipient**, Firebase Console → Firestore → `chatUsers/{uid}` → `expoPushTokens` should be a non-empty list (`ExponentPushToken[...]`)
-3. Send a chat from another account with the recipient force-closed — the **sender** now shows a toast if Expo reports `InvalidCredentials`, missing token, etc.
-4. Manually test Expo delivery with the recipient token:
+1. Confirm both phones installed **v1.0.2+** from the latest GitHub Release (not an older same-named APK left on the phone)
+2. On Messages, tap **Test push on this phone**
+   - If that fails, the toast names the Expo/FCM problem
+   - If that works, Expo→FCM is fine — swipe the app away from recents (**do not** use Android Settings → Force stop; that blocks FCM until the app is opened again)
+3. On the **recipient**, Firebase Console → Firestore → `chatUsers/{uid}` → `expoPushTokens` should be a non-empty list (`ExponentPushToken[...]`)
+4. Send a chat from another account with the recipient swiped away — the **sender** shows a toast if Expo reports `InvalidCredentials`, missing token, etc.
+5. Manually test Expo delivery with the recipient token:
 
 ```bash
 curl -H "Content-Type: application/json" -X POST "https://exp.host/--/api/v2/push/send" -d '{

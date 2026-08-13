@@ -24,6 +24,11 @@ import {
   type ChatConversation,
   type ChatFriend,
 } from '../api/chatApi';
+import {
+  diagnoseChatPush,
+  sendSelfTestChatPush,
+  type ChatPushDiagnosis,
+} from '../api/chatNotifications';
 import { AppModal, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
@@ -70,6 +75,8 @@ export function MessagesScreen({ navigation }: Props) {
     null,
   );
   const [busyAction, setBusyAction] = useState(false);
+  const [pushInfo, setPushInfo] = useState<ChatPushDiagnosis | null>(null);
+  const [pushTesting, setPushTesting] = useState(false);
 
   const canChat = isSignedIn && !skippedLogin && Boolean(session?.user);
 
@@ -124,6 +131,9 @@ export function MessagesScreen({ navigation }: Props) {
             setRefreshing(false);
           },
         );
+        void diagnoseChatPush().then((info) => {
+          if (!cancelled) setPushInfo(info);
+        });
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : 'Could not load messages');
@@ -261,6 +271,33 @@ export function MessagesScreen({ navigation }: Props) {
     }
   };
 
+  const runPushSelfTest = async () => {
+    if (pushTesting) return;
+    setPushTesting(true);
+    try {
+      const info = await diagnoseChatPush();
+      setPushInfo(info);
+      if (info.error || !info.expoToken) {
+        showToast(info.error || 'Push is not ready on this install.');
+        return;
+      }
+      const result = await sendSelfTestChatPush();
+      if (result.deliveryError) {
+        showToast(result.deliveryError);
+      } else if (result.accepted > 0) {
+        showToast(
+          'Push test sent. You should see a banner now. Then force-close (swipe away — don’t Force stop) and have a classmate message you.',
+        );
+      } else {
+        showToast('Push test did not get an Expo ticket — check FCM on EAS.');
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Push test failed');
+    } finally {
+      setPushTesting(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -383,6 +420,27 @@ export function MessagesScreen({ navigation }: Props) {
           </View>
         ) : null}
       </View>
+
+      {canChat ? (
+        <View style={styles.pushPanel}>
+          <Text style={styles.pushTitle}>Closed-app push check</Text>
+          <Text style={styles.pushBody}>
+            {pushInfo?.isExpoGo
+              ? 'Expo Go cannot receive killed-app chat alerts. Install StudyBuddy APK v1.0.2+.'
+              : pushInfo?.error
+                ? pushInfo.error
+                : pushInfo?.expoToken
+                  ? `Ready · token …${pushInfo.expoToken.slice(-12)}`
+                  : 'Checking push registration…'}
+          </Text>
+          <PrimaryButton
+            label={pushTesting ? 'Testing…' : 'Test push on this phone'}
+            variant="secondary"
+            onPress={() => void runPushSelfTest()}
+            style={styles.pushTestBtn}
+          />
+        </View>
+      ) : null}
 
       <FlatList
         data={conversations}
@@ -680,6 +738,20 @@ const styles = StyleSheet.create({
   hint: { color: colors.muted, fontSize: 13 },
   toolbarActions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   actionBtn: { alignSelf: 'flex-start' },
+  pushPanel: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: '#fff',
+    gap: 8,
+  },
+  pushTitle: { fontSize: 13, fontWeight: '800', color: colors.ink },
+  pushBody: { fontSize: 12, color: colors.muted, lineHeight: 17 },
+  pushTestBtn: { alignSelf: 'flex-start' },
   friendsDropdownBtn: {
     flexDirection: 'row',
     alignItems: 'center',

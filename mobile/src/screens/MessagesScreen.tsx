@@ -299,7 +299,7 @@ export function MessagesScreen({ navigation }: Props) {
       hasNativeToken: prev?.hasNativeToken ?? false,
       expoToken: prev?.expoToken ?? null,
       isExpoGo: prev?.isExpoGo ?? false,
-      error: 'Running push diagnostic (permissions → FCM → Expo)…',
+      error: 'Running push diagnostic (permissions → FCM → exp.host → Expo)…',
     }));
 
     try {

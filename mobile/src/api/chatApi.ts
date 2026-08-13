@@ -105,6 +105,37 @@ function tsToIso(value: Timestamp | null | undefined): string | null {
   }
 }
 
+function firebaseErrorCode(err: unknown): string {
+  if (err && typeof err === 'object' && 'code' in err) {
+    return String((err as { code: unknown }).code || '');
+  }
+  return '';
+}
+
+function firebaseErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  return String(err || 'Unknown Firebase error');
+}
+
+/** Map Firestore / Auth failures to actionable app errors. */
+function mapChatError(err: unknown, fallback: string): Error {
+  const code = firebaseErrorCode(err);
+  const message = firebaseErrorMessage(err);
+  if (
+    code === 'permission-denied' ||
+    /missing or insufficient permissions/i.test(message)
+  ) {
+    return new Error(
+      'Chat permission denied. In Firebase Console → Firestore → Rules, paste mobile/firestore.rules and Publish, then try again.',
+    );
+  }
+  if (code === 'unavailable' || /network/i.test(message)) {
+    return new Error('Chat is offline. Check your connection and try again.');
+  }
+  if (err instanceof Error) return err;
+  return new Error(fallback);
+}
+
 export function isChatApiConfigured(): boolean {
   return isFirebaseConfigured();
 }
@@ -257,8 +288,12 @@ export async function upsertChatUser(input: {
       'Firebase chat is not configured. Add EXPO_PUBLIC_FIREBASE_* to mobile/.env',
     );
   }
-  const user = await ensureFirebaseUser(input);
-  return upsertProfile(user, input);
+  try {
+    const user = await ensureFirebaseUser(input);
+    return await upsertProfile(user, input);
+  } catch (err) {
+    throw mapChatError(err, 'Could not set up chat profile');
+  }
 }
 
 export async function ensureChatSession(user: {
@@ -297,197 +332,244 @@ async function requireUid(): Promise<string> {
 }
 
 export async function listConversations(): Promise<ChatConversation[]> {
-  const uid = await requireUid();
-  const db = getFirestoreDb();
-  const q = query(
-    collection(db, 'chatConversations'),
-    where('memberIds', 'array-contains', uid),
-  );
-  const snap = await getDocs(q);
-  const rows: ChatConversation[] = [];
-  for (const docSnap of snap.docs) {
-    const data = docSnap.data() as ConversationDoc;
-    const peerId = (data.memberIds || []).find((id) => id !== uid);
-    if (!peerId) continue;
-    const peer = data.members?.[peerId] || {
-      email: 'unknown',
-      name: 'Student',
-    };
-    rows.push({
-      id: docSnap.id,
-      peer: { id: peerId, email: peer.email, name: peer.name },
-      last_message: data.lastMessage ?? null,
-      last_message_at: tsToIso(data.lastMessageAt),
-      unread_count: Number(data.unread?.[uid] || 0),
+  try {
+    const uid = await requireUid();
+    const db = getFirestoreDb();
+    const q = query(
+      collection(db, 'chatConversations'),
+      where('memberIds', 'array-contains', uid),
+    );
+    const snap = await getDocs(q);
+    const rows: ChatConversation[] = [];
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data() as ConversationDoc;
+      const peerId = (data.memberIds || []).find((id) => id !== uid);
+      if (!peerId) continue;
+      const peer = data.members?.[peerId] || {
+        email: 'unknown',
+        name: 'Student',
+      };
+      rows.push({
+        id: docSnap.id,
+        peer: { id: peerId, email: peer.email, name: peer.name },
+        last_message: data.lastMessage ?? null,
+        last_message_at: tsToIso(data.lastMessageAt),
+        unread_count: Number(data.unread?.[uid] || 0),
+      });
+    }
+    rows.sort((a, b) => {
+      const at = a.last_message_at || '';
+      const bt = b.last_message_at || '';
+      return bt.localeCompare(at);
     });
+    return rows;
+  } catch (err) {
+    throw mapChatError(err, 'Could not load conversations');
   }
-  rows.sort((a, b) => {
-    const at = a.last_message_at || '';
-    const bt = b.last_message_at || '';
-    return bt.localeCompare(at);
-  });
-  return rows;
 }
 
 export async function openDm(peerEmailRaw: string): Promise<ChatConversation> {
-  const uid = await requireUid();
-  const db = getFirestoreDb();
-  const peerEmail = normalizeEmail(peerEmailRaw);
-  if (!peerEmail) throw new Error('Enter a classmate’s email');
+  try {
+    const uid = await requireUid();
+    const db = getFirestoreDb();
+    const peerEmail = normalizeEmail(peerEmailRaw);
+    if (!peerEmail) throw new Error('Enter a classmate’s email');
 
-  const meSnap = await getDoc(doc(db, 'chatUsers', uid));
-  if (!meSnap.exists()) throw new Error('Chat profile missing — reopen Messages');
-  const me = meSnap.data() as UserDoc;
-  if (peerEmail === me.email) {
-    throw new Error('Cannot start a chat with yourself');
-  }
+    const meSnap = await getDoc(doc(db, 'chatUsers', uid));
+    if (!meSnap.exists()) {
+      throw new Error('Chat profile missing — reopen Messages');
+    }
+    const me = meSnap.data() as UserDoc;
+    if (peerEmail === me.email) {
+      throw new Error('Cannot start a chat with yourself');
+    }
 
-  const emailSnap = await getDoc(doc(db, 'chatEmails', peerEmail));
-  if (!emailSnap.exists()) {
-    throw new Error(
-      'No Study Buddy chat account found for that email. They need to open Messages once first.',
-    );
-  }
-  const peerUid = String(emailSnap.data()?.uid || '');
-  if (!peerUid) throw new Error('Invalid chat user for that email');
+    const emailSnap = await getDoc(doc(db, 'chatEmails', peerEmail));
+    if (!emailSnap.exists()) {
+      throw new Error(
+        'No Study Buddy chat account found for that email. They need to open Messages once first.',
+      );
+    }
+    const peerUid = String(emailSnap.data()?.uid || '');
+    if (!peerUid) throw new Error('Invalid chat user for that email');
 
-  const peerSnap = await getDoc(doc(db, 'chatUsers', peerUid));
-  const peerData = peerSnap.exists()
-    ? (peerSnap.data() as UserDoc)
-    : { email: peerEmail, name: peerEmail, localAuthId: '' };
+    const peerSnap = await getDoc(doc(db, 'chatUsers', peerUid));
+    const peerData = peerSnap.exists()
+      ? (peerSnap.data() as UserDoc)
+      : { email: peerEmail, name: peerEmail, localAuthId: '' };
 
-  const id = conversationIdFor(uid, peerUid);
-  const convRef = doc(db, 'chatConversations', id);
-  const existing = await getDoc(convRef);
-  if (!existing.exists()) {
-    const payload: ConversationDoc = {
-      memberIds: [uid, peerUid].sort(),
-      members: {
-        [uid]: { email: me.email, name: me.name },
-        [peerUid]: { email: peerData.email, name: peerData.name },
+    const id = conversationIdFor(uid, peerUid);
+    const convRef = doc(db, 'chatConversations', id);
+    let alreadyExists = false;
+    try {
+      const existing = await getDoc(convRef);
+      alreadyExists = existing.exists();
+    } catch (readErr) {
+      // Older rules denied get on missing docs (`resource` is null), which
+      // surfaced as "Missing or insufficient permissions" when starting a DM.
+      // Treat that as "does not exist" and attempt create.
+      const code = firebaseErrorCode(readErr);
+      const message = firebaseErrorMessage(readErr);
+      if (
+        code !== 'permission-denied' &&
+        !/missing or insufficient permissions/i.test(message)
+      ) {
+        throw readErr;
+      }
+      alreadyExists = false;
+    }
+
+    if (!alreadyExists) {
+      const memberIds = [uid, peerUid].sort();
+      const payload: ConversationDoc = {
+        memberIds,
+        members: {
+          [uid]: { email: me.email, name: me.name },
+          [peerUid]: { email: peerData.email, name: peerData.name },
+        },
+        lastMessage: null,
+        lastMessageAt: null,
+        unread: { [uid]: 0, [peerUid]: 0 },
+      };
+      // create-only semantics: rules allow create; if a race created it, re-read.
+      try {
+        await setDoc(convRef, payload);
+      } catch (createErr) {
+        const again = await getDoc(convRef);
+        if (!again.exists()) throw createErr;
+      }
+    }
+
+    const convSnap = await getDoc(convRef);
+    if (!convSnap.exists()) {
+      throw new Error('Could not create conversation');
+    }
+    const conv = convSnap.data() as ConversationDoc;
+    return {
+      id,
+      peer: {
+        id: peerUid,
+        email: peerData.email,
+        name: peerData.name,
       },
-      lastMessage: null,
-      lastMessageAt: null,
-      unread: { [uid]: 0, [peerUid]: 0 },
+      last_message: conv.lastMessage ?? null,
+      last_message_at: tsToIso(conv.lastMessageAt),
+      unread_count: Number(conv.unread?.[uid] || 0),
     };
-    await setDoc(convRef, payload);
+  } catch (err) {
+    throw mapChatError(err, 'Could not start chat');
   }
-
-  const conv = (await getDoc(convRef)).data() as ConversationDoc;
-  return {
-    id,
-    peer: {
-      id: peerUid,
-      email: peerData.email,
-      name: peerData.name,
-    },
-    last_message: conv.lastMessage ?? null,
-    last_message_at: tsToIso(conv.lastMessageAt),
-    unread_count: Number(conv.unread?.[uid] || 0),
-  };
 }
 
 export async function listMessages(
   conversationId: string,
   opts?: { afterId?: string; limit?: number },
 ): Promise<ChatMessage[]> {
-  const uid = await requireUid();
-  const db = getFirestoreDb();
-  const convRef = doc(db, 'chatConversations', conversationId);
-  const convSnap = await getDoc(convRef);
-  if (!convSnap.exists()) throw new Error('Conversation not found');
-  const conv = convSnap.data() as ConversationDoc;
-  if (!(conv.memberIds || []).includes(uid)) {
-    throw new Error('Not a member of this conversation');
-  }
-
-  const take = Math.min(Math.max(opts?.limit ?? 100, 1), 200);
-  const q = query(
-    collection(db, 'chatConversations', conversationId, 'messages'),
-    orderBy('createdAt', 'asc'),
-    limit(take),
-  );
-  const snap = await getDocs(q);
-  let rows = snap.docs.map((d) => {
-    const data = d.data() as {
-      senderId: string;
-      body: string;
-      createdAt?: Timestamp;
-    };
-    return {
-      id: d.id,
-      conversation_id: conversationId,
-      sender_id: data.senderId,
-      body: data.body,
-      created_at: tsToIso(data.createdAt) || new Date().toISOString(),
-    } satisfies ChatMessage;
-  });
-
-  if (opts?.afterId) {
-    const idx = rows.findIndex((m) => m.id === opts.afterId);
-    rows = idx >= 0 ? rows.slice(idx + 1) : rows;
-  }
-
-  // Mark as read when loading the thread.
-  if (!opts?.afterId) {
-    try {
-      await updateDoc(convRef, { [`unread.${uid}`]: 0 });
-    } catch {
-      // ignore
+  try {
+    const uid = await requireUid();
+    const db = getFirestoreDb();
+    const convRef = doc(db, 'chatConversations', conversationId);
+    const convSnap = await getDoc(convRef);
+    if (!convSnap.exists()) throw new Error('Conversation not found');
+    const conv = convSnap.data() as ConversationDoc;
+    if (!(conv.memberIds || []).includes(uid)) {
+      throw new Error('Not a member of this conversation');
     }
-  }
 
-  return rows;
+    const take = Math.min(Math.max(opts?.limit ?? 100, 1), 200);
+    const q = query(
+      collection(db, 'chatConversations', conversationId, 'messages'),
+      orderBy('createdAt', 'asc'),
+      limit(take),
+    );
+    const snap = await getDocs(q);
+    let rows = snap.docs.map((d) => {
+      const data = d.data() as {
+        senderId: string;
+        body: string;
+        createdAt?: Timestamp;
+      };
+      return {
+        id: d.id,
+        conversation_id: conversationId,
+        sender_id: data.senderId,
+        body: data.body,
+        created_at: tsToIso(data.createdAt) || new Date().toISOString(),
+      } satisfies ChatMessage;
+    });
+
+    if (opts?.afterId) {
+      const idx = rows.findIndex((m) => m.id === opts.afterId);
+      rows = idx >= 0 ? rows.slice(idx + 1) : rows;
+    }
+
+    // Mark as read when loading the thread.
+    if (!opts?.afterId) {
+      try {
+        await updateDoc(convRef, { [`unread.${uid}`]: 0 });
+      } catch {
+        // ignore
+      }
+    }
+
+    return rows;
+  } catch (err) {
+    throw mapChatError(err, 'Could not load messages');
+  }
 }
 
 export async function sendMessage(
   conversationId: string,
   bodyRaw: string,
 ): Promise<ChatMessage> {
-  const uid = await requireUid();
-  const body = bodyRaw.trim();
-  if (!body) throw new Error('Message cannot be empty');
-  if (body.length > 4000) throw new Error('Message is too long');
+  try {
+    const uid = await requireUid();
+    const body = bodyRaw.trim();
+    if (!body) throw new Error('Message cannot be empty');
+    if (body.length > 4000) throw new Error('Message is too long');
 
-  const db = getFirestoreDb();
-  const convRef = doc(db, 'chatConversations', conversationId);
-  const convSnap = await getDoc(convRef);
-  if (!convSnap.exists()) throw new Error('Conversation not found');
-  const conv = convSnap.data() as ConversationDoc;
-  if (!(conv.memberIds || []).includes(uid)) {
-    throw new Error('Not a member of this conversation');
+    const db = getFirestoreDb();
+    const convRef = doc(db, 'chatConversations', conversationId);
+    const convSnap = await getDoc(convRef);
+    if (!convSnap.exists()) throw new Error('Conversation not found');
+    const conv = convSnap.data() as ConversationDoc;
+    if (!(conv.memberIds || []).includes(uid)) {
+      throw new Error('Not a member of this conversation');
+    }
+
+    const messageRef = doc(
+      collection(db, 'chatConversations', conversationId, 'messages'),
+    );
+    const createdAt = Timestamp.now();
+    const batch = writeBatch(db);
+    batch.set(messageRef, {
+      senderId: uid,
+      body,
+      createdAt,
+    });
+
+    const unreadUpdate: Record<string, number> = { ...(conv.unread || {}) };
+    for (const memberId of conv.memberIds || []) {
+      if (memberId === uid) unreadUpdate[memberId] = 0;
+      else unreadUpdate[memberId] = Number(unreadUpdate[memberId] || 0) + 1;
+    }
+    batch.update(convRef, {
+      lastMessage: body.slice(0, 200),
+      lastMessageAt: createdAt,
+      unread: unreadUpdate,
+    });
+    await batch.commit();
+
+    return {
+      id: messageRef.id,
+      conversation_id: conversationId,
+      sender_id: uid,
+      body,
+      created_at: createdAt.toDate().toISOString(),
+    };
+  } catch (err) {
+    throw mapChatError(err, 'Could not send message');
   }
-
-  const messageRef = doc(
-    collection(db, 'chatConversations', conversationId, 'messages'),
-  );
-  const createdAt = Timestamp.now();
-  const batch = writeBatch(db);
-  batch.set(messageRef, {
-    senderId: uid,
-    body,
-    createdAt,
-  });
-
-  const unreadUpdate: Record<string, number> = { ...(conv.unread || {}) };
-  for (const memberId of conv.memberIds || []) {
-    if (memberId === uid) unreadUpdate[memberId] = 0;
-    else unreadUpdate[memberId] = Number(unreadUpdate[memberId] || 0) + 1;
-  }
-  batch.update(convRef, {
-    lastMessage: body.slice(0, 200),
-    lastMessageAt: createdAt,
-    unread: unreadUpdate,
-  });
-  await batch.commit();
-
-  return {
-    id: messageRef.id,
-    conversation_id: conversationId,
-    sender_id: uid,
-    body,
-    created_at: createdAt.toDate().toISOString(),
-  };
 }
 
 /** Live message subscription (replaces polling when used). */

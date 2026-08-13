@@ -46,3 +46,18 @@ After `.env` is filled, open **Messages** while signed in with Google or email. 
 ## 5. EAS / production builds
 
 Add the same `EXPO_PUBLIC_FIREBASE_*` variables to Expo project environments (`preview` / `production`). Local `mobile/.env` is not used by GitHub Actions.
+
+## Troubleshooting
+
+### `Missing or insufficient permissions` when starting a chat
+
+That Firestore error means the security rules denied a read/write.
+
+1. Open **Firebase Console → Firestore → Rules**
+2. Paste the latest `mobile/firestore.rules` from this repo
+3. Click **Publish** (draft rules do nothing until published)
+4. Confirm **Authentication** has Email/Password (+ Anonymous) enabled
+5. Both students must open **Messages** once so their `chatUsers` / `chatEmails` profiles exist
+6. Retry **New chat** with the classmate’s Study Buddy email
+
+Starting a DM previously called `getDoc` on a conversation that did not exist yet. Rules that only checked `request.auth.uid in resource.data.memberIds` fail when `resource` is null — publish the updated rules (or use a build that includes the client fallback) to fix it.

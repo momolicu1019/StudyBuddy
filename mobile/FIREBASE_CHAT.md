@@ -100,12 +100,14 @@ Local banners only work while the app process is alive. **Force-killed / swiped-
    - Package name: `com.studybuddy.ai`
    - Copy the Android App ID (`1:…:android:…`) into `EXPO_PUBLIC_FIREBASE_ANDROID_APP_ID` (local `.env` and EAS preview/production env)
 2. **google-services.json**
-   - `app.config.js` generates `mobile/google-services.json` at build time from Firebase env vars and sets `android.googleServicesFile`
-   - Or download the file from Firebase and place it at `mobile/google-services.json` (takes precedence over generation)
+   - The repo includes `mobile/google-services.json` (Firebase Android app for `com.studybuddy.ai`)
+   - `app.config.js` points `android.googleServicesFile` at that file
+   - If you re-download from Firebase, replace `mobile/google-services.json` (package must stay `com.studybuddy.ai`)
 3. **EAS FCM V1 credentials (Android)**
    - Firebase Console → Project settings → Service accounts → Generate new private key
    - `eas credentials` → Android → FCM V1 service account key → upload that JSON
    - Or upload under [expo.dev credentials](https://expo.dev) for project `studybuddyw`
+   - This is a **private key** — never commit it to the repo (unlike `google-services.json`)
 4. **EAS APNs key (iOS)**
    - Create an Apple Push Notifications key and upload it in EAS iOS credentials
 5. Install a **preview / production / development** build — Expo Go cannot reliably deliver killed-app chat pushes

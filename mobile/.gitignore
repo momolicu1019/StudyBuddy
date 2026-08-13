@@ -34,9 +34,9 @@ yarn-error.*
 .env
 .env*.local
 
-# Generated at EAS/prebuild from EXPO_PUBLIC_FIREBASE_* (or download from Firebase).
-# A manually downloaded file may be kept locally; do not commit service-account keys.
-google-services.json
+# iOS Firebase plist (optional). Android google-services.json is committed —
+# it only has public client identifiers (Expo recommends this for FCM builds).
+# Never commit Firebase service-account private keys (FCM V1 JSON for EAS).
 GoogleService-Info.plist
 
 # typescript

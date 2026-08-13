@@ -43,13 +43,28 @@ function iosUrlSchemeFromClientId(iosClientId) {
 }
 
 /**
- * Build google-services.json so the Android binary can register with FCM.
+ * Resolve google-services.json so the Android binary can register with FCM.
  * Required for chat push when the app is force-killed (Expo → FCM).
- * Prefer an existing file; otherwise generate from EXPO_PUBLIC_FIREBASE_* env.
+ *
+ * Prefer the committed Firebase Console download at ./google-services.json.
+ * Fall back to generating one from EXPO_PUBLIC_FIREBASE_* if the file is missing.
  */
 function resolveAndroidGoogleServicesFile() {
   const existing = path.join(__dirname, 'google-services.json');
-  if (fs.existsSync(existing)) return './google-services.json';
+  if (fs.existsSync(existing)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(existing, 'utf8'));
+      const clients = Array.isArray(parsed?.client) ? parsed.client : [];
+      const hasAndroid = clients.some(
+        (c) =>
+          c?.client_info?.android_client_info?.package_name ===
+          'com.studybuddy.ai',
+      );
+      if (hasAndroid) return './google-services.json';
+    } catch {
+      // fall through to generate
+    }
+  }
 
   const projectId = String(
     process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || '',

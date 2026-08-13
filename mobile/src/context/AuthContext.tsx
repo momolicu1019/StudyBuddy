@@ -445,7 +445,10 @@ function GoogleAuthProvider({ children }: { children: React.ReactNode }) {
         message: tokenResult.message || 'Google Drive authorization failed.',
       };
     }
-    const result = await syncDownFromGoogleDrive(tokenResult.accessToken);
+    const result = await syncDownFromGoogleDrive(
+      auth.session.user,
+      tokenResult.accessToken,
+    );
     if (result.ok) {
       await auth.persist({
         session: {

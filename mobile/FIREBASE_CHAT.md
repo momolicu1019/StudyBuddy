@@ -69,4 +69,32 @@ Starting a DM previously called `getDoc` on a conversation that did not exist ye
 - Tap **New group**, enter a community name, and add friends by Study Buddy email
 - Each friend must have opened **Messages** at least once (same as DMs)
 - Groups are stored as `chatConversations` docs with `type: "group"` (auto-generated ids)
+- Open a group and tap the pencil in the header to **rename** it — any member can update the name
 - Republish `firestore.rules` after pulling this update — older rules only allow 2-member DMs
+
+### Push notifications (new messages)
+
+When someone sends a chat message, classmates get a phone notification:
+
+- DM: **New message from Ada** (or **New messages from Ada** if they already had unread)
+- Group: **New message from Bio study crew**
+
+How it works:
+
+1. Opening **Messages** (or the chat icon) requests notification permission and stores an Expo push token on `chatUsers/{uid}.expoPushTokens`
+2. On send, the sender fans out to recipients via Expo’s push API (`https://exp.host/--/api/v2/push/send`) — no Cloud Functions required
+3. Tapping the notification opens that chat thread
+
+Notes:
+
+- Push requires a **development / preview / production** build (not reliable in Expo Go for all devices)
+- Republish `firestore.rules` so `expoPushTokens` updates are allowed
+- Android uses the `chat-messages` notification channel
+
+### Google Drive sync (chat backup)
+
+**Sync up to Google** also snapshots your Student Messages (DMs + groups, up to 200 messages each) into the same private Drive app-data file as folders/flashcards.
+
+**Sync down from Google** restores study data locally and **re-adds** any missing conversations/messages into Firestore (merge — does not wipe live chats).
+
+Republish `firestore.rules` so restored messages (`restored: true`) are allowed.

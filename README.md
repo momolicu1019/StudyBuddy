@@ -36,7 +36,7 @@ On-device code lives in `mobile/src/storage/`. Sign in is optional via the login
 - Flashcard study mode
 - Quiz mode with scoring
 - AI Tutor chat (on-device helpers)
-- **Student Messages** — 1:1 DMs via Firebase Auth + Cloud Firestore (chat icon next to profile)
+- **Student Messages** — 1:1 DMs + group chats via Firebase Auth + Cloud Firestore (chat icon next to profile), with push notifications for new messages and in-thread group rename
 - Pomodoro focus timer
 - Study progress stats
 
@@ -92,7 +92,7 @@ Google Cloud Console checklist:
    - SHA-1: fingerprint of the keystore that signed the APK you installed
 4. Rebuild only if you changed native deps / env baked into the binary. Fixing SHA-1 in Google Cloud does **not** require a rebuild — wait a few minutes and retry.
 
-Google Drive sync stores a private app-data backup (folders, flashcards, progress, and source files under 12MB each). Sync down **replaces** local data for the signed-in account.
+Google Drive sync stores a private app-data backup (folders, flashcards, progress, source files under 12MB each, and **Student Messages** chats). Sync down **replaces** local study data for the signed-in account and **re-adds** backed-up chat threads/messages into Firebase.
 
 #### Fix `DEVELOPER_ERROR` after picking a Google account
 

@@ -182,6 +182,64 @@ export type ChatPushDiagnosis = {
   error: string | null;
 };
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function explainNativePushError(err: unknown): string {
+  const raw =
+    err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (/SERVICE_NOT_AVAILABLE/i.test(raw)) {
+    return (
+      'Google Play Services could not reach FCM (SERVICE_NOT_AVAILABLE). ' +
+      'Check internet, update Google Play Services, sign into a Google account on this phone, ' +
+      'set the clock to automatic, then reopen StudyBuddy and tap Test again. ' +
+      'Avoid Force stop — it can block FCM until the next open.'
+    );
+  }
+  if (/SERVICE_MISSING|SERVICE_DISABLED|SERVICE_INVALID/i.test(raw)) {
+    return (
+      'Google Play Services is missing or disabled on this phone — FCM push cannot work here.'
+    );
+  }
+  if (/TIMEOUT|NETWORK|UNAVAILABLE/i.test(raw)) {
+    return (
+      'Network error while fetching the FCM token. Switch Wi‑Fi/mobile data and retry.'
+    );
+  }
+  if (raw) return `FCM device token failed: ${raw}`;
+  return 'FCM device token failed — google-services.json may be missing from this APK.';
+}
+
+/**
+ * Native FCM/APNs token. Retries SERVICE_NOT_AVAILABLE — it is often transient
+ * right after install / Play Services wake-up.
+ */
+async function fetchNativeDevicePushToken(): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      if (attempt > 0) await sleep(700 * attempt);
+      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      const native = String(
+        typeof deviceToken === 'string'
+          ? deviceToken
+          : (deviceToken as { data?: string })?.data || '',
+      ).trim();
+      if (native) return native;
+      lastError = new Error('Empty native push token');
+    } catch (e) {
+      lastError = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      // Only retry the common transient Play Services race.
+      if (!/SERVICE_NOT_AVAILABLE/i.test(msg)) break;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError || 'Native push token failed'));
+}
+
 /** Inspect whether this install can receive closed-app Expo→FCM pushes. */
 export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
   const isExpoGo = Constants.appOwnership === 'expo';
@@ -226,12 +284,7 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
 
     let hasNativeToken = false;
     try {
-      const deviceToken = await Notifications.getDevicePushTokenAsync();
-      const native = String(
-        typeof deviceToken === 'string'
-          ? deviceToken
-          : (deviceToken as { data?: string })?.data || '',
-      ).trim();
+      const native = await fetchNativeDevicePushToken();
       hasNativeToken = Boolean(native);
     } catch (e) {
       return {
@@ -239,10 +292,7 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
         hasNativeToken: false,
         expoToken: null,
         isExpoGo: false,
-        error:
-          e instanceof Error
-            ? `FCM device token failed: ${e.message}`
-            : 'FCM device token failed — google-services.json may be missing from this APK.',
+        error: explainNativePushError(e),
       };
     }
 
@@ -346,24 +396,11 @@ export async function registerChatPushToken(): Promise<string | null> {
     }
 
     // Native FCM/APNs token must exist before Expo can deliver to a killed app.
-    // If this throws, google-services.json / FCM is missing from this binary.
+    // If this throws, Play Services / network / google-services.json is the issue.
     try {
-      const deviceToken = await Notifications.getDevicePushTokenAsync();
-      const native = String(
-        typeof deviceToken === 'string'
-          ? deviceToken
-          : (deviceToken as { data?: string })?.data || '',
-      ).trim();
-      if (!native) {
-        setLastPushDeliveryError(
-          'No FCM device token — install the latest StudyBuddy APK (not Expo Go).',
-        );
-        return null;
-      }
-    } catch {
-      setLastPushDeliveryError(
-        'FCM not ready on this install — reinstall the latest APK from GitHub Releases.',
-      );
+      await fetchNativeDevicePushToken();
+    } catch (e) {
+      setLastPushDeliveryError(explainNativePushError(e));
       return null;
     }
 

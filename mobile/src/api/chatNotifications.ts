@@ -176,6 +176,35 @@ export async function registerChatPushToken(): Promise<string | null> {
   }
 }
 
+/**
+ * Keep chatUsers.expoPushTokens in sync when Expo rotates the device token
+ * (common after reinstall / OS updates). Call once while signed in.
+ */
+export function subscribeChatPushTokenRefresh(
+  onToken: (token: string) => void,
+): () => void {
+  if (!canUsePush()) return () => undefined;
+  try {
+    const sub = Notifications.addPushTokenListener((token) => {
+      const value = String(
+        typeof token === 'string'
+          ? token
+          : (token as { data?: string })?.data || '',
+      ).trim();
+      if (value) onToken(value);
+    });
+    return () => {
+      try {
+        sub.remove();
+      } catch {
+        // ignore
+      }
+    };
+  } catch {
+    return () => undefined;
+  }
+}
+
 export function chatNotificationTitle(
   fromLabel: string,
   unreadBefore: number,
@@ -310,6 +339,7 @@ export async function sendChatPushNotifications(input: {
   if (tokens.length === 0) return { badTokens: [] };
 
   const data = toPushData(input.data);
+  const ttlSeconds = 60 * 60 * 24;
   const messages = tokens.map((to) => ({
     to,
     sound: 'default' as const,
@@ -320,6 +350,11 @@ export async function sendChatPushNotifications(input: {
     priority: 'high' as const,
     // Prefer waking the device; ignored on platforms that don't support it.
     _contentAvailable: true,
+    // Keep the push deliverable if the device was briefly offline.
+    ttl: ttlSeconds,
+    expiration: Math.floor(Date.now() / 1000) + ttlSeconds,
+    // iOS: show as an alert even when Focus / delivery coalescing applies.
+    interruptionLevel: 'timeSensitive' as const,
   }));
 
   const badTokens: string[] = [];

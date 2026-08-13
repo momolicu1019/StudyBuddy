@@ -564,17 +564,23 @@ export async function listConversations(): Promise<ChatConversation[]> {
 }
 
 /** Live conversation list (previews + unread) for the signed-in chat user. */
+export type ConversationSyncMeta = {
+  /** True when this snapshot came from the local Firestore cache. */
+  fromCache: boolean;
+};
+
 export function subscribeConversations(
   onChange: (
     conversations: ChatConversation[],
     friends: ChatFriend[],
+    meta?: ConversationSyncMeta,
   ) => void,
   onError?: (error: Error) => void,
 ): Unsubscribe {
   const auth = getFirebaseAuth();
   const uid = auth.currentUser?.uid;
   if (!uid) {
-    onChange([], []);
+    onChange([], [], { fromCache: false });
     return () => undefined;
   }
 
@@ -583,8 +589,11 @@ export function subscribeConversations(
     collection(db, 'chatConversations'),
     where('memberIds', 'array-contains', uid),
   );
+  // includeMetadataChanges so we can tell cache vs server and avoid a false
+  // "new message" banner when the app cold-starts and cache then catches up.
   return onSnapshot(
     q,
+    { includeMetadataChanges: true },
     (snap) => {
       const rows: ChatConversation[] = [];
       const rawDocs = snap.docs.map((docSnap) => ({
@@ -600,7 +609,9 @@ export function subscribeConversations(
         const bt = b.last_message_at || '';
         return bt.localeCompare(at);
       });
-      onChange(rows, friendsFromConversationDocs(rawDocs, uid));
+      onChange(rows, friendsFromConversationDocs(rawDocs, uid), {
+        fromCache: snap.metadata.fromCache,
+      });
     },
     (err) => onError?.(mapChatError(err, 'Could not sync conversations')),
   );
@@ -1115,13 +1126,22 @@ export async function sendMessage(
     await batch.commit();
 
     // Push notify other members (best-effort; never fail the send).
-    void notifyConversationMembers({
-      conversationId,
-      conv,
-      senderId: uid,
-      body,
-      unreadBeforeByMember,
-    });
+    // Await briefly so the Expo fan-out starts before the JS runtime can be
+    // suspended if the sender backgrounds the app right after sending.
+    try {
+      await Promise.race([
+        notifyConversationMembers({
+          conversationId,
+          conv,
+          senderId: uid,
+          body,
+          unreadBeforeByMember,
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+      ]);
+    } catch {
+      // ignore push failures
+    }
 
     return {
       id: messageRef.id,

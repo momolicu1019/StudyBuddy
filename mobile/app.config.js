@@ -42,11 +42,75 @@ function iosUrlSchemeFromClientId(iosClientId) {
   return `com.googleusercontent.apps.${prefix}`;
 }
 
+/**
+ * Build google-services.json so the Android binary can register with FCM.
+ * Required for chat push when the app is force-killed (Expo → FCM).
+ * Prefer an existing file; otherwise generate from EXPO_PUBLIC_FIREBASE_* env.
+ */
+function resolveAndroidGoogleServicesFile() {
+  const existing = path.join(__dirname, 'google-services.json');
+  if (fs.existsSync(existing)) return './google-services.json';
+
+  const projectId = String(
+    process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || '',
+  ).trim();
+  const apiKey = String(process.env.EXPO_PUBLIC_FIREBASE_API_KEY || '').trim();
+  const senderId = String(
+    process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || '',
+  ).trim();
+  const storageBucket = String(
+    process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET || '',
+  ).trim();
+  // Prefer the Android app id (1:…:android:…). Fall back to web app id only if
+  // callers have not registered an Android app yet (FCM may still fail).
+  const androidAppId = String(
+    process.env.EXPO_PUBLIC_FIREBASE_ANDROID_APP_ID ||
+      process.env.EXPO_PUBLIC_FIREBASE_APP_ID ||
+      '',
+  ).trim();
+
+  if (!projectId || !apiKey || !senderId || !androidAppId) {
+    return undefined;
+  }
+
+  const generated = {
+    project_info: {
+      project_number: senderId,
+      project_id: projectId,
+      storage_bucket: storageBucket || `${projectId}.appspot.com`,
+    },
+    client: [
+      {
+        client_info: {
+          mobilesdk_app_id: androidAppId,
+          android_client_info: {
+            package_name: 'com.studybuddy.ai',
+          },
+        },
+        oauth_client: [],
+        api_key: [{ current_key: apiKey }],
+        services: {
+          appinvite_service: { other_platform_oauth_client: [] },
+        },
+      },
+    ],
+    configuration_version: '1',
+  };
+
+  try {
+    fs.writeFileSync(existing, `${JSON.stringify(generated, null, 2)}\n`, 'utf8');
+    return './google-services.json';
+  } catch {
+    return undefined;
+  }
+}
+
 /** @type {import('expo/config').ExpoConfig} */
 module.exports = ({ config }) => {
   const base = appJson.expo ?? config;
   const iosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '';
   const iosUrlScheme = iosUrlSchemeFromClientId(iosClientId);
+  const googleServicesFile = resolveAndroidGoogleServicesFile();
 
   const plugins = [...(base.plugins ?? [])];
   if (iosUrlScheme) {
@@ -56,9 +120,28 @@ module.exports = ({ config }) => {
     ]);
   }
 
+  const iosInfoPlist = {
+    ...(base.ios?.infoPlist ?? {}),
+    // Allow the OS to wake the app for remote chat pushes when backgrounded.
+    UIBackgroundModes: Array.from(
+      new Set([
+        ...((base.ios?.infoPlist?.UIBackgroundModes) || []),
+        'remote-notification',
+      ]),
+    ),
+  };
+
   return {
     ...base,
     plugins,
+    ios: {
+      ...(base.ios ?? {}),
+      infoPlist: iosInfoPlist,
+    },
+    android: {
+      ...(base.android ?? {}),
+      ...(googleServicesFile ? { googleServicesFile } : {}),
+    },
     extra: {
       ...(base.extra ?? {}),
       // Loaded from mobile/.env at start time (EXPO_PUBLIC_* also inlined by Metro).
@@ -73,6 +156,8 @@ module.exports = ({ config }) => {
       googleWebClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '',
       googleIosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '',
       googleAndroidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '',
+      firebaseAndroidAppId:
+        process.env.EXPO_PUBLIC_FIREBASE_ANDROID_APP_ID || '',
     },
   };
 };

@@ -56,11 +56,11 @@
       "expo-web-browser",
       "expo-asset",
       "expo-sharing",
-      [
+        [
         "expo-notifications",
         {
           "color": "#6C63FF",
-          "defaultChannel": "deadline-reminders",
+          "defaultChannel": "chat-messages",
           "sounds": []
         }
       ]

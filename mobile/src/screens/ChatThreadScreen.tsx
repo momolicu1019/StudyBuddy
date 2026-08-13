@@ -29,7 +29,7 @@ import {
   updateGroupTitle,
   type ChatMessage,
 } from '../api/chatApi';
-import { setActiveChatConversationId, consumeLastPushDeliveryError } from '../api/chatNotifications';
+import { setActiveChatConversationId } from '../api/chatNotifications';
 import { AppModal, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
@@ -52,6 +52,7 @@ export function ChatThreadScreen({ navigation, route }: Props) {
   const isFocused = useIsFocused();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const lastCountRef = useRef(0);
+  const lastMarkedReadRef = useRef(0);
   const focusedRef = useRef(isFocused);
   focusedRef.current = isFocused;
 
@@ -163,7 +164,12 @@ export function ChatThreadScreen({ navigation, route }: Props) {
           }
           lastCountRef.current = rows.length;
           if (focusedRef.current) {
-            void markConversationRead(conversationId);
+            const now = Date.now();
+            // Avoid a write storm: every own-send snapshot used to call markRead.
+            if (now - lastMarkedReadRef.current > 2500) {
+              lastMarkedReadRef.current = now;
+              void markConversationRead(conversationId);
+            }
           }
         },
         (err) => {
@@ -222,7 +228,10 @@ export function ChatThreadScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (isFocused) {
       setActiveChatConversationId(conversationId);
+      lastMarkedReadRef.current = Date.now();
       void markConversationRead(conversationId);
+      // Cooldown inside registerChatPushForCurrentUser makes this cheap when
+      // the token was already saved this minute.
       void registerChatPushForCurrentUser();
     } else {
       setActiveChatConversationId(null);
@@ -258,26 +267,41 @@ export function ChatThreadScreen({ navigation, route }: Props) {
   const onSend = async () => {
     const body = input.trim();
     if (!body || sending) return;
-    setSending(true);
+    const uid = myId || getCachedChatUser()?.id;
+    if (!uid) {
+      showToast('Chat is still connecting…');
+      return;
+    }
+
+    const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimistic: ChatMessage = {
+      id: tempId,
+      conversation_id: conversationId,
+      sender_id: uid,
+      body,
+      created_at: new Date().toISOString(),
+    };
+
+    // Show the bubble immediately — do not block the composer on Firestore.
     setInput('');
+    setSending(true);
+    setMessages((prev) => [...prev, optimistic]);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    });
+    setSending(false);
+
     try {
       const msg = await sendMessage(conversationId, body);
-      setMessages((prev) =>
-        prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
-      );
-      requestAnimationFrame(() => {
-        listRef.current?.scrollToEnd({ animated: true });
+      setMessages((prev) => {
+        const withoutTemp = prev.filter((m) => m.id !== tempId);
+        if (withoutTemp.some((m) => m.id === msg.id)) return withoutTemp;
+        return [...withoutTemp, msg];
       });
-      const pushErr = consumeLastPushDeliveryError();
-      if (pushErr) {
-        // Helpful when closed-app remote push fails (credentials / missing token).
-        showToast(pushErr);
-      }
     } catch (e) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setInput(body);
       showToast(e instanceof Error ? e.message : 'Could not send');
-    } finally {
-      setSending(false);
     }
   };
 

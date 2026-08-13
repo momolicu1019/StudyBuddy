@@ -20,6 +20,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   limit,
   onSnapshot,
   orderBy,
@@ -120,6 +121,28 @@ type UserDoc = {
 };
 
 const MAX_PUSH_TOKENS = 10;
+
+/** Hot cache of conversation memberIds from live listeners — avoids getDoc on send. */
+const conversationMembersCache = new Map<string, string[]>();
+
+function rememberConversationMembers(
+  conversationId: string,
+  memberIds: string[] | undefined,
+): void {
+  if (!conversationId || !Array.isArray(memberIds) || memberIds.length === 0) {
+    return;
+  }
+  conversationMembersCache.set(
+    conversationId,
+    Array.from(new Set(memberIds.map(String))),
+  );
+}
+
+/** Dedup concurrent FCM registration + skip redundant Firestore writes. */
+let registerPushInFlight: Promise<boolean> | null = null;
+let lastSavedFcmToken: string | null = null;
+let lastSavedFcmAt = 0;
+const FCM_REREGISTER_COOLDOWN_MS = 60_000;
 
 type ConversationDoc = {
   type?: 'dm' | 'group';
@@ -373,6 +396,8 @@ async function upsertProfile(user: User, input: {
 export async function clearChatSession(): Promise<void> {
   if (!isFirebaseConfigured()) return;
   clearSessionCache();
+  lastSavedFcmToken = null;
+  lastSavedFcmAt = 0;
   try {
     const auth = getFirebaseAuth();
     const uid = auth.currentUser?.uid;
@@ -397,85 +422,129 @@ export async function registerChatPushForCurrentUser(
 ): Promise<boolean> {
   if (!isChatApiConfigured()) return false;
 
-  try {
-    const uid = await requireUid();
-    const auth = getFirebaseAuth();
-
-    const {
-      getCurrentNativeFcmToken,
-      ensureChatNotificationHandler,
-    } = await import('./chatNotifications');
-
-    ensureChatNotificationHandler();
-
-    const provided = String(knownToken || '').trim();
-
-    const token =
-      provided || (await getCurrentNativeFcmToken());
-
-    if (!token) return false;
-
-    const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
-    const snap = await getDoc(userRef);
-
-    const existingDoc = snap.exists()
-      ? (snap.data() as UserDoc)
-      : null;
-
-    const existing = existingDoc?.fcmTokens || [];
-
-    const next = Array.from(
-      new Set([token, ...existing]),
-    ).slice(0, MAX_PUSH_TOKENS);
-
-    const email =
-      existingDoc?.email ||
-      auth.currentUser?.email ||
-      '';
-
-    const name =
-      existingDoc?.name ||
-      auth.currentUser?.displayName ||
-      email ||
-      'Student';
-
-    await setDoc(
-      userRef,
-      {
-        email: String(
-          email || 'unknown@studybuddy.local',
-        ),
-        name: String(name || 'Student'),
-        localAuthId:
-          existingDoc?.localAuthId ||
-          auth.currentUser?.uid ||
-          uid,
-
-        fcmTokens: next,
-
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
-
+  const provided = String(knownToken || '').trim();
+  if (
+    provided &&
+    provided === lastSavedFcmToken &&
+    Date.now() - lastSavedFcmAt < FCM_REREGISTER_COOLDOWN_MS
+  ) {
     return true;
-  } catch (e) {
+  }
+  if (
+    !provided &&
+    lastSavedFcmToken &&
+    Date.now() - lastSavedFcmAt < FCM_REREGISTER_COOLDOWN_MS
+  ) {
+    return true;
+  }
+
+  if (registerPushInFlight) return registerPushInFlight;
+
+  registerPushInFlight = (async () => {
     try {
+      const uid = await requireUid();
+      const auth = getFirebaseAuth();
+      // Ensure Firestore sees a fresh ID token before token writes.
+      try {
+        await auth.currentUser?.getIdToken();
+      } catch {
+        // continue — requireUid already confirmed a user
+      }
+
       const {
-        reportChatPushDeliveryError,
+        getCurrentNativeFcmToken,
+        ensureChatNotificationHandler,
       } = await import('./chatNotifications');
 
-      reportChatPushDeliveryError(
-        e instanceof Error
-          ? `Could not save FCM token: ${e.message}`
-          : 'Could not save FCM token.',
-      );
-    } catch {
-      // ignore
-    }
+      ensureChatNotificationHandler();
 
-    return false;
-  }
+      const token = provided || (await getCurrentNativeFcmToken());
+      if (!token) return false;
+
+      if (
+        token === lastSavedFcmToken &&
+        Date.now() - lastSavedFcmAt < FCM_REREGISTER_COOLDOWN_MS
+      ) {
+        return true;
+      }
+
+      const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
+      const snap = await getDoc(userRef);
+      const existingDoc = snap.exists() ? (snap.data() as UserDoc) : null;
+      const existing = existingDoc?.fcmTokens || [];
+
+      if (existing.includes(token)) {
+        lastSavedFcmToken = token;
+        lastSavedFcmAt = Date.now();
+        return true;
+      }
+
+      const next = Array.from(new Set([token, ...existing])).slice(
+        0,
+        MAX_PUSH_TOKENS,
+      );
+
+      if (existingDoc) {
+        // Token-only update — matches firestore.rules isSelfTokenUpdate path
+        // and avoids failing when email/name were ever incomplete on the doc.
+        await updateDoc(userRef, {
+          fcmTokens: next,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        const email =
+          auth.currentUser?.email ||
+          sessionCache?.email ||
+          'unknown@studybuddy.local';
+        const name =
+          auth.currentUser?.displayName ||
+          sessionCache?.name ||
+          email ||
+          'Student';
+        await setDoc(userRef, {
+          email: String(email),
+          name: String(name),
+          localAuthId: auth.currentUser?.uid || uid,
+          fcmTokens: next,
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      lastSavedFcmToken = token;
+      lastSavedFcmAt = Date.now();
+      return true;
+    } catch (e) {
+      try {
+        const { reportChatPushDeliveryError } = await import(
+          './chatNotifications'
+        );
+        const code = firebaseErrorCode(e);
+        const message = firebaseErrorMessage(e);
+        if (
+          code === 'permission-denied' ||
+          /missing or insufficient permissions/i.test(message)
+        ) {
+          reportChatPushDeliveryError(
+            'Could not save FCM token: Firestore rules blocked the write. Publish mobile/firestore.rules in Firebase Console, then reopen Messages.',
+          );
+        } else {
+          reportChatPushDeliveryError(
+            e instanceof Error
+              ? `Could not save FCM token: ${e.message}`
+              : 'Could not save FCM token.',
+          );
+        }
+      } catch {
+        // ignore
+      }
+
+      return false;
+    } finally {
+      registerPushInFlight = null;
+    }
+  })();
+
+  return registerPushInFlight;
 }
 
 /** Remove a device FCM token from the current chat profile (e.g. on sign-out). */
@@ -490,14 +559,14 @@ export async function unregisterChatPushToken(token: string): Promise<void> {
     const existing = (snap.data() as UserDoc).fcmTokens || [];
     const next = existing.filter((t) => t !== value);
     if (next.length === existing.length) return;
-    await setDoc(
-      userRef,
-      {
-        fcmTokens: next,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
+    await updateDoc(userRef, {
+      fcmTokens: next,
+      updatedAt: serverTimestamp(),
+    });
+    if (lastSavedFcmToken === value) {
+      lastSavedFcmToken = null;
+      lastSavedFcmAt = 0;
+    }
   } catch {
     // ignore
   }
@@ -762,6 +831,8 @@ export function subscribeConversations(
         data: () => docSnap.data() as ConversationDoc,
       }));
       for (const docSnap of rawDocs) {
+        const data = docSnap.data();
+        rememberConversationMembers(docSnap.id, data.memberIds);
         const mapped = mapConversation(docSnap, uid);
         if (mapped) rows.push(mapped);
       }
@@ -858,8 +929,10 @@ export async function openDm(peerEmailRaw: string): Promise<ChatConversation> {
     if (!convSnap.exists()) {
       throw new Error('Could not create conversation');
     }
+    const convData = convSnap.data() as ConversationDoc;
+    rememberConversationMembers(id, convData.memberIds);
     const mapped = mapConversation(
-      { id, data: () => convSnap.data() as ConversationDoc },
+      { id, data: () => convData },
       uid,
     );
     if (!mapped) throw new Error('Could not create conversation');
@@ -962,6 +1035,7 @@ export async function createGroupChat(input: {
       unread,
     };
     await setDoc(convRef, payload);
+    rememberConversationMembers(convRef.id, memberIds);
 
     const mapped = mapConversation(
       { id: convRef.id, data: () => payload },
@@ -1254,10 +1328,17 @@ export async function sendMessage(
 
     const db = getFirestoreDb();
     const convRef = doc(db, 'chatConversations', conversationId);
-    const convSnap = await getDoc(convRef);
-    if (!convSnap.exists()) throw new Error('Conversation not found');
-    const conv = convSnap.data() as ConversationDoc;
-    if (!(conv.memberIds || []).includes(uid)) {
+
+    // Prefer memberIds from live listeners so send does not wait on getDoc.
+    let memberIds = conversationMembersCache.get(conversationId);
+    if (!memberIds?.length) {
+      const convSnap = await getDoc(convRef);
+      if (!convSnap.exists()) throw new Error('Conversation not found');
+      const conv = convSnap.data() as ConversationDoc;
+      memberIds = conv.memberIds || [];
+      rememberConversationMembers(conversationId, memberIds);
+    }
+    if (!(memberIds || []).includes(uid)) {
       throw new Error('Not a member of this conversation');
     }
 
@@ -1268,10 +1349,17 @@ export async function sendMessage(
     // remote listeners receive a concrete createdAt (serverTimestamp is null
     // until the write resolves, which can delay remote ordering).
     const createdAt = Timestamp.now();
-    const unreadUpdate: Record<string, number> = { ...(conv.unread || {}) };
-    for (const memberId of conv.memberIds || []) {
-      if (memberId === uid) unreadUpdate[memberId] = 0;
-      else unreadUpdate[memberId] = Number(unreadUpdate[memberId] || 0) + 1;
+
+    // Field-level unread increments avoid read-modify-write races and skip
+    // rewriting the entire unread map on every send.
+    const conversationUpdate: Record<string, unknown> = {
+      lastMessage: body.slice(0, 200),
+      lastMessageAt: createdAt,
+      [`unread.${uid}`]: 0,
+    };
+    for (const memberId of memberIds) {
+      if (memberId === uid) continue;
+      conversationUpdate[`unread.${memberId}`] = increment(1);
     }
 
     const batch = writeBatch(db);
@@ -1280,11 +1368,7 @@ export async function sendMessage(
       body,
       createdAt,
     });
-    batch.update(convRef, {
-      lastMessage: body.slice(0, 200),
-      lastMessageAt: createdAt,
-      unread: unreadUpdate,
-    });
+    batch.update(convRef, conversationUpdate);
     await batch.commit();
 
     return {
@@ -1368,6 +1452,7 @@ export function subscribeMessages(
     (snap) => {
       if (!snap.exists()) return;
       const data = snap.data() as ConversationDoc;
+      rememberConversationMembers(conversationId, data.memberIds);
       const next: Record<string, string> = {};
       for (const [id, m] of Object.entries(data.members || {})) {
         next[id] = m.name;

@@ -24,6 +24,10 @@ import {
   type ChatConversation,
   type ChatFriend,
 } from '../api/chatApi';
+import {
+  peekLastPushDeliveryError,
+  sendSelfTestChatPush,
+} from '../api/chatNotifications';
 import { AppModal, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
@@ -70,6 +74,7 @@ export function MessagesScreen({ navigation }: Props) {
     null,
   );
   const [busyAction, setBusyAction] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
 
   const canChat = isSignedIn && !skippedLogin && Boolean(session?.user);
 
@@ -286,6 +291,26 @@ export function MessagesScreen({ navigation }: Props) {
     }
   };
 
+  const retryPushSetup = async () => {
+    if (pushBusy) return;
+    setPushBusy(true);
+    try {
+      const result = await sendSelfTestChatPush();
+      if (result.deliveryError) {
+        showToast(result.deliveryError);
+      } else {
+        showToast('Notifications ready — FCM token saved on this phone.');
+      }
+    } catch (e) {
+      showToast(
+        peekLastPushDeliveryError() ||
+          (e instanceof Error ? e.message : 'Could not set up notifications'),
+      );
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -319,6 +344,30 @@ export function MessagesScreen({ navigation }: Props) {
         <Text style={styles.hint}>
           Message classmates 1:1 or start a group community
         </Text>
+        <Pressable
+          onPress={() => void retryPushSetup()}
+          disabled={pushBusy}
+          style={({ pressed }) => [
+            styles.pushRetryBtn,
+            pressed && { opacity: 0.85 },
+            pushBusy && { opacity: 0.6 },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Retry notification setup"
+        >
+          {pushBusy ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Ionicons
+              name="notifications-outline"
+              size={14}
+              color={colors.primary}
+            />
+          )}
+          <Text style={styles.pushRetryText}>
+            {pushBusy ? 'Saving FCM…' : 'Fix notifications'}
+          </Text>
+        </Pressable>
         <View style={styles.toolbarActions}>
           <PrimaryButton
             label="New chat"
@@ -703,6 +752,19 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.line,
   },
   hint: { color: colors.muted, fontSize: 13 },
+  pushRetryBtn: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  pushRetryText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
   toolbarActions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   actionBtn: { alignSelf: 'flex-start' },
   friendsDropdownBtn: {

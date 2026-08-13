@@ -44,13 +44,36 @@ service cloud.firestore {
 
     match /chatUsers/{uid} {
       allow read: if signedIn();
-      allow create, update: if isSelf(uid)
+      allow create: if isSelf(uid)
         && request.resource.data.email is string
         && request.resource.data.name is string
         && (!('expoPushTokens' in request.resource.data)
             || request.resource.data.expoPushTokens is list)
         && (!('fcmTokens' in request.resource.data)
             || request.resource.data.fcmTokens is list);
+      // Full profile updates still require email/name. Token-only refreshes
+      // may touch just fcmTokens/expoPushTokens (+ updatedAt) so a partial
+      // legacy profile cannot block push registration.
+      allow update: if isSelf(uid) && (
+        (
+          request.resource.data.email is string
+          && request.resource.data.name is string
+          && (!('expoPushTokens' in request.resource.data)
+              || request.resource.data.expoPushTokens is list)
+          && (!('fcmTokens' in request.resource.data)
+              || request.resource.data.fcmTokens is list)
+        )
+        || (
+          request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['fcmTokens', 'updatedAt'])
+          && request.resource.data.fcmTokens is list
+        )
+        || (
+          request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['expoPushTokens', 'updatedAt'])
+          && request.resource.data.expoPushTokens is list
+        )
+      );
       allow delete: if false;
     }
 

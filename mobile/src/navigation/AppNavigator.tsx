@@ -323,7 +323,7 @@ export function AppNavigator() {
     ready && isSignedIn && !skippedLogin && Boolean(session?.user);
 
   // Local chat banners via Firestore (works like deadlines when the app is alive).
-  // Also keep the Expo push token registered so remote push can wake a killed app.
+  // Also keep the native FCM token registered for closed-app Cloud Function push.
   useEffect(() => {
     if (!canChat || !session?.user || !isChatApiConfigured()) {
       stopChatIncomingWatcher();

@@ -149,50 +149,6 @@ async function ensurePermissionsAndChannel(): Promise<boolean> {
   return status === 'granted';
 }
 
-/**
- * Get the native Android FCM registration token.
- *
- * This does NOT contact Expo Push Service.
- */
-export async function getCurrentNativeFcmToken(): Promise<string | null> {
-  if (Platform.OS !== 'android') return null;
-
-  try {
-    const granted = await ensurePermissionsAndChannel();
-    if (!granted) {
-      return null;
-    }
-
-    const deviceToken =
-      await Notifications.getDevicePushTokenAsync();
-
-    if (String(deviceToken.type).toLowerCase() !== 'android') {
-      return null;
-    }
-
-    const value = String(deviceToken.data || '').trim();
-
-    return value || null;
-  } catch (error) {
-    setLastPushDeliveryError(
-      error instanceof Error
-        ? `FCM token error: ${error.message}`
-        : 'Could not get FCM token.',
-    );
-
-    return null;
-  }
-}
-
-export type ChatPushDiagnosis = {
-  permission: 'granted' | 'denied' | 'undetermined' | 'unknown';
-  hasNativeToken: boolean;
-  /** Native FCM (Android) registration token. */
-  fcmToken: string | null;
-  isExpoGo: boolean;
-  error: string | null;
-};
-
 async function withTimeout<T>(
   promise: Promise<T>,
   ms: number,
@@ -223,7 +179,7 @@ function explainFcmTokenError(err: unknown): string {
   if (/timed out|TIMEOUT/i.test(raw)) {
     return (
       'FCM token timed out. Check internet, Google Play Services, ' +
-      'notification permission, and that this APK includes google-services.json, then tap Test again.'
+      'notification permission, and that this APK includes google-services.json, then retry.'
     );
   }
   if (/NETWORK|UNAVAILABLE|Failed to connect|ECONNREFUSED|ENOTFOUND/i.test(raw)) {
@@ -232,6 +188,50 @@ function explainFcmTokenError(err: unknown): string {
   if (raw) return `FCM token failed: ${raw}`;
   return 'FCM token failed.';
 }
+
+/**
+ * Get the native Android FCM registration token.
+ *
+ * This does NOT contact Expo Push Service.
+ * Hard-timeout so Play Services stalls cannot hang the JS thread / UI.
+ */
+export async function getCurrentNativeFcmToken(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+
+  try {
+    const granted = await ensurePermissionsAndChannel();
+    if (!granted) {
+      setLastPushDeliveryError('Notification permission is not granted.');
+      return null;
+    }
+
+    const deviceToken = await withTimeout(
+      Notifications.getDevicePushTokenAsync(),
+      12_000,
+      'FCM token',
+    );
+
+    if (String(deviceToken.type).toLowerCase() !== 'android') {
+      return null;
+    }
+
+    const value = String(deviceToken.data || '').trim();
+
+    return value || null;
+  } catch (error) {
+    setLastPushDeliveryError(explainFcmTokenError(error));
+    return null;
+  }
+}
+
+export type ChatPushDiagnosis = {
+  permission: 'granted' | 'denied' | 'undetermined' | 'unknown';
+  hasNativeToken: boolean;
+  /** Native FCM (Android) registration token. */
+  fcmToken: string | null;
+  isExpoGo: boolean;
+  error: string | null;
+};
 
 /**
  * Diagnostic: permissions + native FCM device token.

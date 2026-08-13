@@ -3,8 +3,8 @@
  *
  * When this device's app process is alive (foreground or backgrounded), new
  * unread from classmates triggers a local OS notification — same delivery
- * path as deadline reminders, so it works even when Expo→FCM remote push is
- * misconfigured. Remote Expo push still runs from the sender for killed apps.
+ * path as deadline reminders. Closed-app delivery uses native FCM via the
+ * Cloud Function (chatUsers.fcmTokens), not Expo Push Service.
  */
 
 import {

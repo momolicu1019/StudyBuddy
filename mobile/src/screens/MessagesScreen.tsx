@@ -133,6 +133,9 @@ export function MessagesScreen({ navigation }: Props) {
         );
         void diagnoseChatPush().then((info) => {
           if (!cancelled) setPushInfo(info);
+          if (!cancelled && info.expoToken) {
+            void registerChatPushForCurrentUser(info.expoToken);
+          }
         });
       } catch (e) {
         if (cancelled) return;
@@ -289,13 +292,28 @@ export function MessagesScreen({ navigation }: Props) {
         showToast(info.error || 'Push is not ready on this install.');
         return;
       }
+      const saved = await registerChatPushForCurrentUser(info.expoToken);
+      if (!saved) {
+        showToast(
+          'Token ready on phone, but Firestore expoPushTokens is empty — save failed. Check sign-in / rules.',
+        );
+      }
       setPushInfo({
         ...info,
         error: 'Sending Expo→FCM test notification…',
       });
       const result = await sendSelfTestChatPush();
       const after = await diagnoseChatPush();
-      setPushInfo(after);
+      setPushInfo(
+        saved
+          ? after
+          : {
+              ...after,
+              error:
+                after.error ||
+                'Token on phone, but not saved to Firestore yet — classmates cannot notify you while closed.',
+            },
+      );
       if (result.deliveryError) {
         showToast(result.deliveryError);
       } else if (result.accepted > 0) {

@@ -51,6 +51,11 @@ function setLastPushDeliveryError(message: string | null): void {
   lastPushDeliveryError = message ? String(message).slice(0, 180) : null;
 }
 
+/** Used by chatApi when persisting tokens fails. */
+export function reportChatPushDeliveryError(message: string): void {
+  setLastPushDeliveryError(message);
+}
+
 export type ChatNotificationData = {
   type: typeof DATA_TYPE;
   conversationId: string;
@@ -413,10 +418,18 @@ export async function sendSelfTestChatPush(): Promise<PushSendResult> {
     return { badTokens: [], deliveryError, accepted: 0 };
   }
 
-  // Persist token so classmate sends also reach this device.
+  // Persist the token we already have — do not re-fetch FCM (often flakes and
+  // leaves chatUsers.expoPushTokens empty even after Ready).
   try {
     const { registerChatPushForCurrentUser } = await import('./chatApi');
-    await registerChatPushForCurrentUser();
+    const saved = await registerChatPushForCurrentUser(diagnosis.expoToken);
+    if (!saved) {
+      const deliveryError =
+        consumeLastPushDeliveryError() ||
+        'Got a push token but could not save it to Firestore (expoPushTokens is empty).';
+      setLastPushDeliveryError(deliveryError);
+      // Still try the local self-test send with the in-memory token.
+    }
   } catch {
     // still attempt the self-test send
   }

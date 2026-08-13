@@ -311,7 +311,9 @@ export async function clearChatSession(): Promise<void> {
 }
 
 /** Persist this device's Expo push token on the signed-in chat profile. */
-export async function registerChatPushForCurrentUser(): Promise<boolean> {
+export async function registerChatPushForCurrentUser(
+  knownToken?: string | null,
+): Promise<boolean> {
   if (!isChatApiConfigured()) return false;
   try {
     const uid = await requireUid();
@@ -319,7 +321,10 @@ export async function registerChatPushForCurrentUser(): Promise<boolean> {
     const { registerChatPushToken, ensureChatNotificationHandler } =
       await import('./chatNotifications');
     ensureChatNotificationHandler();
-    const token = await registerChatPushToken();
+    // Prefer a token we already fetched — Play Services often flakes on a
+    // second getDevicePushTokenAsync call and would leave Firestore empty.
+    const provided = String(knownToken || '').trim();
+    const token = provided || (await registerChatPushToken());
     if (!token) return false;
 
     const userRef = doc(getFirestoreDb(), 'chatUsers', uid);
@@ -353,14 +358,27 @@ export async function registerChatPushForCurrentUser(): Promise<boolean> {
       {
         email: String(email || 'unknown@studybuddy.local'),
         name: String(name || 'Student'),
+        localAuthId:
+          existingDoc?.localAuthId ||
+          auth.currentUser?.uid ||
+          uid,
         expoPushTokens: next,
         updatedAt: serverTimestamp(),
       },
       { merge: true },
     );
     return true;
-  } catch {
-    // Push is best-effort — chat still works without it.
+  } catch (e) {
+    try {
+      const { reportChatPushDeliveryError } = await import('./chatNotifications');
+      reportChatPushDeliveryError(
+        e instanceof Error
+          ? `Could not save push token to Firestore: ${e.message}`
+          : 'Could not save push token to Firestore.',
+      );
+    } catch {
+      // ignore
+    }
     return false;
   }
 }

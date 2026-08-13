@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   ScrollView,
@@ -26,7 +27,9 @@ import {
 } from '../api/chatApi';
 import {
   diagnoseChatPush,
+  diagnosePushNotifications,
   sendSelfTestChatPush,
+  summarizePushDiagnostic,
   type ChatPushDiagnosis,
 } from '../api/chatNotifications';
 import { AppModal, PrimaryButton } from '../components/ui';
@@ -296,13 +299,45 @@ export function MessagesScreen({ navigation }: Props) {
       hasNativeToken: prev?.hasNativeToken ?? false,
       expoToken: prev?.expoToken ?? null,
       isExpoGo: prev?.isExpoGo ?? false,
-      error: 'Checking Expo push registration…',
+      error: 'Running push diagnostic (permissions → FCM → Expo)…',
     }));
 
     try {
+      const diagnostic = await diagnosePushNotifications();
+      const summary = summarizePushDiagnostic(diagnostic);
+
+      const fcmOk =
+        (diagnostic.fcm as { success?: boolean } | undefined)?.success === true;
+      const expoOk =
+        (diagnostic.expo as { success?: boolean } | undefined)?.success ===
+        true;
+
+      setPushInfo((prev) => ({
+        permission: prev?.permission ?? 'unknown',
+        hasNativeToken: fcmOk,
+        expoToken: prev?.expoToken ?? null,
+        isExpoGo: prev?.isExpoGo ?? false,
+        error: summary,
+      }));
+
+      Alert.alert('Push Diagnostic', JSON.stringify(diagnostic, null, 2));
+
+      if (!fcmOk || !expoOk) {
+        showToast(
+          !fcmOk
+            ? 'FCM device token failed — see Push Diagnostic alert for the real error.'
+            : 'Expo push token failed — see Push Diagnostic alert for the real error.',
+        );
+        return;
+      }
+
+      // Tokens look healthy — continue with the existing self-test send path.
       const info = await diagnoseChatPush();
 
-      setPushInfo(info);
+      setPushInfo({
+        ...info,
+        error: info.error || summary,
+      });
 
       if (info.error || !info.expoToken) {
         showToast(
@@ -370,6 +405,7 @@ export function MessagesScreen({ navigation }: Props) {
         error: message,
       }));
 
+      Alert.alert('Diagnostic Error', String(e));
       showToast(message);
     } finally {
       setPushTesting(false);
@@ -512,7 +548,7 @@ export function MessagesScreen({ navigation }: Props) {
                   : 'Checking Expo push registration…'}
           </Text>
           <PrimaryButton
-            label={pushTesting ? 'Testing…' : 'Test push on this phone'}
+            label={pushTesting ? 'Diagnosing…' : 'Test push on this phone'}
             variant="secondary"
             onPress={() => void runPushSelfTest()}
             style={styles.pushTestBtn}

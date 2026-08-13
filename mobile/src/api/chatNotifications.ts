@@ -1,18 +1,37 @@
 /**
- * Expo push notifications for student chat.
- * Tokens are stored on chatUsers; the sender fans out via Expo's push API
- * (no Cloud Functions required).
+ * Expo push + local OS notifications for student chat.
+ *
+ * Remote path: tokens on chatUsers; sender fans out via Expo's push API.
+ * Local path: recipient shows a local banner when Firestore reports new unread
+ * while this device's app process is alive (same reliability as deadlines —
+ * does not require FCM/APNs). Remote push still covers fully-killed apps when
+ * EAS push credentials are configured.
  */
 
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 
-import { ensureForegroundNotificationHandler } from '../storage/foregroundNotifications';
+import {
+  ensureForegroundNotificationHandler,
+  setNotificationSuppressor,
+} from '../storage/foregroundNotifications';
+import {
+  CHAT_CHANNEL_ID,
+  ensureNotificationChannels,
+} from '../storage/notificationChannels';
 
-const CHANNEL_ID = 'chat-messages';
+const CHANNEL_ID = CHAT_CHANNEL_ID;
 const DATA_TYPE = 'chat';
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+
+/** Conversation the user is currently viewing — skip local banners for it. */
+let activeConversationId: string | null = null;
+
+/** Recent local/remote keys to avoid double-notifying within a short window. */
+const recentNotifyKeys = new Map<string, number>();
+const DEDUPE_MS = 20_000;
+let suppressorReady = false;
 
 export type ChatNotificationData = {
   type: typeof DATA_TYPE;
@@ -35,8 +54,59 @@ function canUsePush(): boolean {
   return Platform.OS === 'ios' || Platform.OS === 'android';
 }
 
+function pruneNotifyKeys(now = Date.now()): void {
+  for (const [k, at] of recentNotifyKeys) {
+    if (now - at > DEDUPE_MS) recentNotifyKeys.delete(k);
+  }
+}
+
+function wasRecentlyNotified(key: string): boolean {
+  pruneNotifyKeys();
+  return recentNotifyKeys.has(key);
+}
+
+function markNotified(key: string): void {
+  pruneNotifyKeys();
+  recentNotifyKeys.set(key, Date.now());
+}
+
+function chatDedupeKeyFromContent(input: {
+  conversationId: string;
+  title?: string;
+  body?: string;
+}): string {
+  return `${input.conversationId}|${String(input.body || '').slice(0, 80)}|${String(input.title || '')}`;
+}
+
+function installChatDuplicateSuppressor(): void {
+  if (suppressorReady) return;
+  suppressorReady = true;
+  setNotificationSuppressor((notification) => {
+    const content = notification.request.content;
+    const chat = parseChatNotificationData(content.data);
+    if (!chat) return false;
+    const key = chatDedupeKeyFromContent({
+      conversationId: chat.conversationId,
+      title: content.title || undefined,
+      body: content.body || undefined,
+    });
+    if (wasRecentlyNotified(key)) return true;
+    markNotified(key);
+    return false;
+  });
+}
+
 export function ensureChatNotificationHandler(): void {
   ensureForegroundNotificationHandler();
+  installChatDuplicateSuppressor();
+}
+
+export function setActiveChatConversationId(id: string | null): void {
+  activeConversationId = id ? String(id).trim() || null : null;
+}
+
+export function getActiveChatConversationId(): string | null {
+  return activeConversationId;
 }
 
 function easProjectId(): string | undefined {
@@ -53,18 +123,7 @@ function easProjectId(): string | undefined {
 async function ensurePermissionsAndChannel(): Promise<boolean> {
   if (!canUsePush()) return false;
   ensureChatNotificationHandler();
-
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-      name: 'Messages',
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#6C63FF',
-      sound: 'default',
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-      bypassDnd: false,
-    });
-  }
+  await ensureNotificationChannels();
 
   const current = await Notifications.getPermissionsAsync();
   let status = current.status;
@@ -112,6 +171,7 @@ export async function registerChatPushToken(): Promise<string | null> {
     return value || null;
   } catch {
     // Simulator / Expo Go / missing credentials — chat still works without push.
+    // Local Firestore-driven banners still notify when the app process is alive.
     return null;
   }
 }
@@ -182,9 +242,56 @@ export function parseChatNotificationData(
 }
 
 export type PushSendResult = {
-  /** Tokens Expo reported as DeviceNotRegistered / invalid. */
+  /** Tokens Expo reported as DeviceNotRegistered (safe to drop). */
   badTokens: string[];
 };
+
+async function postExpoPush(
+  body: unknown,
+): Promise<{
+  ok: boolean;
+  tickets: Array<{
+    status?: string;
+    message?: string;
+    details?: { error?: string };
+  }>;
+}> {
+  const response = await fetch(EXPO_PUSH_URL, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Accept-Encoding': 'gzip, deflate',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    return { ok: false, tickets: [] };
+  }
+
+  const payload = (await response.json()) as {
+    data?:
+      | {
+          status?: string;
+          message?: string;
+          details?: { error?: string };
+        }
+      | Array<{
+          status?: string;
+          message?: string;
+          details?: { error?: string };
+        }>;
+  };
+
+  const tickets = Array.isArray(payload.data)
+    ? payload.data
+    : payload.data
+      ? [payload.data]
+      : [];
+
+  return { ok: true, tickets };
+}
 
 /** Fan-out Expo push notifications to recipient tokens (best-effort). */
 export async function sendChatPushNotifications(input: {
@@ -211,49 +318,33 @@ export async function sendChatPushNotifications(input: {
     data,
     channelId: CHANNEL_ID,
     priority: 'high' as const,
+    // Prefer waking the device; ignored on platforms that don't support it.
+    _contentAvailable: true,
   }));
 
   const badTokens: string[] = [];
 
   try {
-    // Expo accepts a single object or an array of up to 100 messages.
     const chunkSize = 100;
     for (let i = 0; i < messages.length; i += chunkSize) {
       const chunk = messages.slice(i, i + chunkSize);
-      const response = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Accept-Encoding': 'gzip, deflate',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(chunk.length === 1 ? chunk[0] : chunk),
-      });
+      const body = chunk.length === 1 ? chunk[0] : chunk;
 
-      if (!response.ok) continue;
+      let result = await postExpoPush(body);
+      // One quick retry for transient network / 5xx style failures.
+      if (!result.ok) {
+        await new Promise((r) => setTimeout(r, 400));
+        result = await postExpoPush(body);
+      }
+      if (!result.ok) continue;
 
-      const payload = (await response.json()) as {
-        data?: Array<{
-          status?: string;
-          message?: string;
-          details?: { error?: string };
-        }>;
-      };
-
-      const tickets = Array.isArray(payload.data)
-        ? payload.data
-        : payload.data
-          ? [payload.data]
-          : [];
-
-      tickets.forEach((ticket, index) => {
+      result.tickets.forEach((ticket, index) => {
         if (!ticket || ticket.status !== 'error') return;
         const err = ticket.details?.error || ticket.message || '';
-        if (
-          /DeviceNotRegistered|InvalidCredentials|InvalidProviderToken/i.test(
-            err,
-          )
-        ) {
+        // Only prune per-device invalid tokens. Project credential errors
+        // (InvalidCredentials / InvalidProviderToken) must NOT wipe tokens —
+        // those are EAS/FCM setup issues and the same Expo token stays valid.
+        if (/DeviceNotRegistered/i.test(err)) {
           const token = chunk[index]?.to;
           if (token) badTokens.push(token);
         }
@@ -264,6 +355,62 @@ export async function sendChatPushNotifications(input: {
   }
 
   return { badTokens: Array.from(new Set(badTokens)) };
+}
+
+/**
+ * Show a local OS notification for an incoming chat message.
+ * Used when Firestore reports new unread on this device (app process alive).
+ */
+export async function presentLocalChatNotification(input: {
+  conversationId: string;
+  title: string;
+  body: string;
+  peerName: string;
+  peerEmail: string;
+  isGroup: boolean;
+  /** Optional dedupe key (defaults to conversation + body). */
+  dedupeKey?: string;
+}): Promise<void> {
+  if (!canUsePush()) return;
+  const conversationId = String(input.conversationId || '').trim();
+  if (!conversationId) return;
+  if (activeConversationId && activeConversationId === conversationId) return;
+
+  const dedupeKey =
+    input.dedupeKey ||
+    chatDedupeKeyFromContent({
+      conversationId,
+      title: input.title,
+      body: input.body,
+    });
+  // Handler marks keys when the banner is presented — only skip here if a
+  // twin (local or remote) already showed moments ago.
+  if (wasRecentlyNotified(dedupeKey)) return;
+
+  try {
+    const granted = await ensurePermissionsAndChannel();
+    if (!granted) return;
+
+    await Notifications.scheduleNotificationAsync({
+      identifier: `chat-local-${conversationId}`,
+      content: {
+        title: input.title,
+        body: input.body.slice(0, 180),
+        sound: true,
+        data: toPushData({
+          type: DATA_TYPE,
+          conversationId,
+          peerName: input.peerName,
+          peerEmail: input.peerEmail,
+          isGroup: input.isGroup,
+        }),
+        ...(Platform.OS === 'android' ? { channelId: CHANNEL_ID } : {}),
+      },
+      trigger: null,
+    });
+  } catch {
+    // Best-effort local banner.
+  }
 }
 
 export function isChatNotificationResponse(

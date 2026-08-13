@@ -21,11 +21,13 @@ import {
   addGroupMembers,
   ensureChatSession,
   markConversationRead,
+  registerChatPushForCurrentUser,
   sendMessage,
   subscribeMessages,
   updateGroupTitle,
   type ChatMessage,
 } from '../api/chatApi';
+import { setActiveChatConversationId } from '../api/chatNotifications';
 import { AppModal, PrimaryButton } from '../components/ui';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
@@ -185,8 +187,15 @@ export function ChatThreadScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     if (isFocused) {
+      setActiveChatConversationId(conversationId);
       void markConversationRead(conversationId);
+      void registerChatPushForCurrentUser();
+    } else {
+      setActiveChatConversationId(null);
     }
+    return () => {
+      setActiveChatConversationId(null);
+    };
   }, [conversationId, isFocused]);
 
   // Keep composer above the software keyboard on iOS and Android.

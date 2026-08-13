@@ -83,16 +83,18 @@ When someone sends a chat message, classmates get a phone notification:
 
 How it works:
 
-1. Opening **Messages** (or the chat icon) requests notification permission and stores an Expo push token on `chatUsers/{uid}.expoPushTokens`
-2. On send, the sender fans out to recipients via Expo’s push API (`https://exp.host/--/api/v2/push/send`) — no Cloud Functions required
-3. Tapping the notification opens that chat thread
+1. Signing in (header / Messages) requests notification permission, creates the Android `chat-messages` channel, and stores an Expo push token on `chatUsers/{uid}.expoPushTokens`
+2. On send, the sender fans out via Expo’s push API (`https://exp.host/--/api/v2/push/send`) — no Cloud Functions required
+3. Separately, if the recipient’s app process is alive, Firestore unread updates also trigger a **local** OS banner (same path as deadline reminders). This works even when Expo→FCM remote delivery is misconfigured
+4. Tapping the notification opens that chat thread
 
 Notes:
 
-- Push requires a **development / preview / production** build (not reliable in Expo Go for all devices)
+- Local banners require the recipient app to be running (foreground or background). Fully force-killed apps still need remote Expo push
+- Remote push requires a **development / preview / production** build (not reliable in Expo Go)
 - Republish `firestore.rules` so `expoPushTokens` updates are allowed
-- Android uses the `chat-messages` notification channel
-- Android also needs **FCM V1 credentials** configured in EAS (`eas credentials`) for remote delivery
+- Android uses the `chat-messages` notification channel (created at app boot)
+- Android also needs **FCM V1 credentials** configured in EAS (`eas credentials`) for remote delivery when the app is killed
 - iOS needs an **APNs key** uploaded to the Expo project for remote delivery
 - Notification `data` values sent to Expo must be strings (booleans can break Android FCM delivery)
 

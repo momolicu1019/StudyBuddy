@@ -12,6 +12,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 
 import { ensureForegroundNotificationHandler } from './foregroundNotifications';
+import {
+  DEADLINE_CHANNEL_ID,
+  ensureNotificationChannels,
+} from './notificationChannels';
 import type { Deadline } from './schema';
 import {
   daysUntilDue,
@@ -23,7 +27,7 @@ import {
   type NearingUrgency,
 } from './deadlineUtils';
 
-const CHANNEL_ID = 'deadline-reminders';
+const CHANNEL_ID = DEADLINE_CHANNEL_ID;
 /** Remind every 2 hours on the local clock (00:00 … 22:00). */
 const REMINDER_INTERVAL_HOURS = 2;
 const REMINDER_HOURS = Array.from(
@@ -110,16 +114,7 @@ function notificationCopy(
 async function ensurePermissionsAndChannel(): Promise<boolean> {
   if (!canUseNotifications()) return false;
   ensureDeadlineNotificationHandler();
-
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
-      name: 'Deadline reminders',
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#D84A62',
-      sound: 'default',
-    });
-  }
+  await ensureNotificationChannels();
 
   const current = await Notifications.getPermissionsAsync();
   let status = current.status;

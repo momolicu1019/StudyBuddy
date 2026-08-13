@@ -29,10 +29,15 @@ import {
   subscribeUnreadTotal,
 } from '../api/chatApi';
 import {
+  startChatIncomingWatcher,
+  stopChatIncomingWatcher,
+} from '../api/chatIncomingWatcher';
+import {
   ensureChatNotificationHandler,
   parseChatNotificationData,
   type ChatNotificationData,
 } from '../api/chatNotifications';
+import { ensureNotificationChannels } from '../storage/notificationChannels';
 import { AboutModal } from '../screens/AboutModal';
 import { AccountModal } from '../screens/AccountModal';
 import { AITutorScreen } from '../screens/AITutorScreen';
@@ -303,15 +308,52 @@ function AITutorTabScreen() {
 
 export function AppNavigator() {
   const { toast } = useApp();
-  const { ready, isSignedIn, skippedLogin } = useAuth();
+  const { ready, isSignedIn, skippedLogin, session } = useAuth();
   const showLogin = ready && !isSignedIn && !skippedLogin;
   const pendingDeadlineTap = useRef(false);
   const pendingChatTap = useRef<ChatNotificationData | null>(null);
+  const canChat =
+    ready && isSignedIn && !skippedLogin && Boolean(session?.user);
+
+  // Local chat banners via Firestore (works like deadlines when the app is alive).
+  useEffect(() => {
+    if (!canChat || !session?.user || !isChatApiConfigured()) {
+      stopChatIncomingWatcher();
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const me = await ensureChatSession({
+          id: session.user.id,
+          email: session.user.email,
+          name: session.user.name,
+        });
+        if (cancelled) return;
+        void registerChatPushForCurrentUser();
+        startChatIncomingWatcher(me.id);
+      } catch {
+        if (!cancelled) stopChatIncomingWatcher();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stopChatIncomingWatcher();
+    };
+  }, [
+    canChat,
+    session?.user?.id,
+    session?.user?.email,
+    session?.user?.name,
+  ]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    // Ensure foreground banners work even before Messages is opened.
+    // Ensure foreground banners + Android channels exist even before Messages opens.
     ensureChatNotificationHandler();
+    void ensureNotificationChannels();
 
     const handleResponseData = (data: unknown) => {
       const chat = parseChatNotificationData(notificationDataFromResponse(data));

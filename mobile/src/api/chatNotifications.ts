@@ -242,6 +242,28 @@ function explainNativePushError(err: unknown): string {
   return 'FCM device token failed — google-services.json may be missing from this APK.';
 }
 
+function explainExpoPushError(err: unknown): string {
+  const raw =
+    err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (/UnknownHostException|Unable to resolve host|exp\.host/i.test(raw)) {
+    return (
+      'This phone cannot reach Expo (DNS failed for exp.host). ' +
+      'Switch Wi‑Fi ↔ mobile data, turn off VPN/Private DNS (or set Private DNS to Automatic), ' +
+      'forget/rejoin Wi‑Fi, then tap Test again. Without reaching exp.host, closed-app push cannot register.'
+    );
+  }
+  if (/timed out|TIMEOUT/i.test(raw)) {
+    return explainNativePushError(err);
+  }
+  if (/NETWORK|UNAVAILABLE|Failed to connect|ECONNREFUSED|ENOTFOUND/i.test(raw)) {
+    return (
+      'Network error talking to Expo push servers. Switch networks and retry Test push.'
+    );
+  }
+  if (raw) return `Expo push token failed: ${raw}`;
+  return 'Expo push token failed.';
+}
+
 /**
  * Native FCM/APNs token. Short retries + per-attempt timeout so Test push
  * cannot hang forever on SERVICE_NOT_AVAILABLE / Play Services stalls.
@@ -364,12 +386,7 @@ export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
         hasNativeToken,
         expoToken: null,
         isExpoGo: false,
-        error:
-          e instanceof Error
-            ? /timed out/i.test(e.message)
-              ? explainNativePushError(e)
-              : `Expo push token failed: ${e.message}`
-            : 'Expo push token failed.',
+        error: explainExpoPushError(e),
       };
     }
   } catch (e) {
@@ -452,12 +469,10 @@ export async function registerChatPushToken(): Promise<string | null> {
       return null;
     }
     return value;
-  } catch {
-    // Simulator / Expo Go / missing credentials — chat still works without push.
+  } catch (e) {
+    // Simulator / Expo Go / missing credentials / network — chat still works.
     // Local Firestore-driven banners still notify when the app process is alive.
-    setLastPushDeliveryError(
-      'Push registration failed — closed-app chat alerts may not work on this install.',
-    );
+    setLastPushDeliveryError(explainExpoPushError(e));
     return null;
   }
 }

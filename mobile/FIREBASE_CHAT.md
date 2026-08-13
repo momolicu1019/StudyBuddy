@@ -135,6 +135,18 @@ curl -H "Content-Type: application/json" -X POST "https://exp.host/--/api/v2/pus
 
 Then fetch the receipt id from the response via `https://exp.host/--/api/v2/push/getReceipts`. `InvalidCredentials` means the FCM V1 key on EAS is wrong/incomplete; `ok` means Expo handed off to FCM and the device/OS is the next place to check.
 
+#### `Unable to resolve host "exp.host"`
+
+The phone got past FCM device-token fetch, but **cannot DNS-resolve Expo’s servers**. Closed-app registration needs `exp.host`.
+
+Try:
+
+1. Switch **Wi‑Fi ↔ mobile data**
+2. Turn off **VPN**
+3. Android Settings → Network → Private DNS → **Off** or **Automatic** (not a broken custom DNS)
+4. Forget/rejoin Wi‑Fi, or try another network
+5. Open a browser to confirm general internet works, then tap **Test push** again
+
 #### `SERVICE_NOT_AVAILABLE` on Test push
 
 That error is from **Google Play Services on the phone**, not from missing EAS credentials. The app never got a native FCM token, so closed-app push cannot work yet.

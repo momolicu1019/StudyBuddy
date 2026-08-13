@@ -101,21 +101,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       await setActiveStorageScope(storageScope);
       if (!alive) return;
       await refresh();
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [authReady, storageScope, skippedLogin, refresh]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
+      if (!alive) return;
+      // Schedule deadline reminders only after the account storage scope is active.
       try {
+        const { ensureChatNotificationHandler } = await import(
+          '../api/chatNotifications'
+        );
         const { ensureDeadlineNotificationHandler, syncDeadlineNotifications } =
           await import('../storage/deadlineNotifications');
         ensureDeadlineNotificationHandler();
+        ensureChatNotificationHandler();
         const deadlines = await api.getDeadlines();
-        if (!cancelled) {
+        if (alive) {
           await syncDeadlineNotifications(deadlines);
         }
       } catch {
@@ -123,9 +120,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
     })();
     return () => {
-      cancelled = true;
+      alive = false;
     };
-  }, []);
+  }, [authReady, storageScope, skippedLogin, refresh]);
 
   const createSubject = useCallback(
     async (name: string, icon: string) => {

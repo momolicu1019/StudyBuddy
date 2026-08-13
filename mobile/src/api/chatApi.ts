@@ -329,12 +329,43 @@ export async function registerChatPushForCurrentUser(): Promise<void> {
     ) {
       return;
     }
-    await updateDoc(userRef, {
-      expoPushTokens: next,
-      updatedAt: serverTimestamp(),
-    });
+    // set+merge so token writes still work if the profile doc is partial/missing.
+    await setDoc(
+      userRef,
+      {
+        expoPushTokens: next,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
   } catch {
     // Push is best-effort — chat still works without it.
+  }
+}
+
+/** Drop invalid Expo tokens from a chat profile (best-effort). */
+async function pruneChatPushTokens(
+  memberId: string,
+  badTokens: string[],
+): Promise<void> {
+  const remove = new Set(
+    badTokens.map((t) => String(t || '').trim()).filter(Boolean),
+  );
+  if (remove.size === 0) return;
+  try {
+    const userRef = doc(getFirestoreDb(), 'chatUsers', memberId);
+    const snap = await getDoc(userRef);
+    if (!snap.exists()) return;
+    const existing = (snap.data() as UserDoc).expoPushTokens || [];
+    const next = existing.filter((t) => !remove.has(t));
+    if (next.length === existing.length) return;
+    await setDoc(
+      userRef,
+      { expoPushTokens: next, updatedAt: serverTimestamp() },
+      { merge: true },
+    );
+  } catch {
+    // ignore prune failures
   }
 }
 
@@ -350,10 +381,14 @@ export async function unregisterChatPushToken(token: string): Promise<void> {
     const existing = (snap.data() as UserDoc).expoPushTokens || [];
     const next = existing.filter((t) => t !== value);
     if (next.length === existing.length) return;
-    await updateDoc(userRef, {
-      expoPushTokens: next,
-      updatedAt: serverTimestamp(),
-    });
+    await setDoc(
+      userRef,
+      {
+        expoPushTokens: next,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true },
+    );
   } catch {
     // ignore
   }
@@ -922,7 +957,7 @@ async function notifyConversationMembers(input: {
         const unreadBefore = Number(
           input.unreadBeforeByMember[memberId] || 0,
         );
-        await sendChatPushNotifications({
+        const result = await sendChatPushNotifications({
           tokens: memberTokens,
           title: chatNotificationTitle(fromLabel, unreadBefore),
           body: input.body,
@@ -934,6 +969,9 @@ async function notifyConversationMembers(input: {
             isGroup,
           },
         });
+        if (result.badTokens.length > 0) {
+          void pruneChatPushTokens(memberId, result.badTokens);
+        }
       } catch {
         // skip members we cannot notify
       }

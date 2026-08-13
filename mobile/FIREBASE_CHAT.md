@@ -90,6 +90,9 @@ Notes:
 - Push requires a **development / preview / production** build (not reliable in Expo Go for all devices)
 - Republish `firestore.rules` so `expoPushTokens` updates are allowed
 - Android uses the `chat-messages` notification channel
+- Android also needs **FCM V1 credentials** configured in EAS (`eas credentials`) for remote delivery
+- iOS needs an **APNs key** uploaded to the Expo project for remote delivery
+- Notification `data` values sent to Expo must be strings (booleans can break Android FCM delivery)
 
 ### Google Drive sync (chat backup)
 

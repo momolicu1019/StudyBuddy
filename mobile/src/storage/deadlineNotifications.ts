@@ -10,6 +10,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 
+import { ensureForegroundNotificationHandler } from './foregroundNotifications';
 import type { Deadline } from './schema';
 import {
   daysUntilDue,
@@ -30,24 +31,15 @@ const OVERDUE_REMINDER_DAYS = 3;
 const CATCHUP_PREFIX = 'deadline.notif.catchup.';
 const DATA_TYPE = 'deadline';
 
-let handlerReady = false;
-let syncing: Promise<void> | null = null;
+/** Serialize syncs so cancel+reschedule never races across account switches. */
+let syncChain: Promise<void> = Promise.resolve();
 
 function canUseNotifications(): boolean {
   return Platform.OS === 'ios' || Platform.OS === 'android';
 }
 
 export function ensureDeadlineNotificationHandler(): void {
-  if (!canUseNotifications() || handlerReady) return;
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
-  });
-  handlerReady = true;
+  ensureForegroundNotificationHandler();
 }
 
 function reminderAt(day: Date, hour: number): Date {
@@ -122,7 +114,13 @@ async function ensurePermissionsAndChannel(): Promise<boolean> {
   const current = await Notifications.getPermissionsAsync();
   let status = current.status;
   if (status !== 'granted') {
-    const requested = await Notifications.requestPermissionsAsync();
+    const requested = await Notifications.requestPermissionsAsync({
+      ios: {
+        allowAlert: true,
+        allowBadge: true,
+        allowSound: true,
+      },
+    });
     status = requested.status;
   }
   return status === 'granted';
@@ -252,11 +250,8 @@ export async function syncDeadlineNotifications(
 ): Promise<void> {
   if (!canUseNotifications()) return;
 
-  if (syncing) {
-    await syncing;
-  }
-
-  syncing = (async () => {
+  const snapshot = deadlines.slice();
+  const run = async () => {
     try {
       const granted = await ensurePermissionsAndChannel();
       if (!granted) return;
@@ -264,18 +259,17 @@ export async function syncDeadlineNotifications(
       await cancelDeadlineNotifications();
 
       const now = new Date();
-      for (const deadline of deadlines) {
+      for (const deadline of snapshot) {
         if (deadline.completed) continue;
         await scheduleForDeadline(deadline, now);
       }
     } catch {
       // Notifications are best-effort; never block deadline CRUD.
-    } finally {
-      syncing = null;
     }
-  })();
+  };
 
-  await syncing;
+  syncChain = syncChain.then(run, run);
+  await syncChain;
 }
 
 /** Convenience: load is owned by caller; this just syncs a known list. */
@@ -291,9 +285,24 @@ export async function cancelAllDeadlineNotifications(): Promise<void> {
 export function isDeadlineNotificationResponse(
   data: unknown,
 ): data is { type: typeof DATA_TYPE; screen?: string } {
-  return Boolean(
-    data &&
-      typeof data === 'object' &&
-      (data as { type?: string }).type === DATA_TYPE,
-  );
+  let payload: unknown = data;
+  if (typeof data === 'string') {
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return false;
+    }
+  }
+  if (!payload || typeof payload !== 'object') return false;
+  const record = payload as { type?: unknown; dataString?: string };
+  if (record.type === DATA_TYPE) return true;
+  if (typeof record.dataString === 'string') {
+    try {
+      const nested = JSON.parse(record.dataString) as { type?: unknown };
+      return nested.type === DATA_TYPE;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }

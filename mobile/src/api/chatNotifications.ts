@@ -174,6 +174,159 @@ export async function getCurrentChatPushToken(): Promise<string | null> {
   }
 }
 
+export type ChatPushDiagnosis = {
+  permission: 'granted' | 'denied' | 'undetermined' | 'unknown';
+  hasNativeToken: boolean;
+  expoToken: string | null;
+  isExpoGo: boolean;
+  error: string | null;
+};
+
+/** Inspect whether this install can receive closed-app Expo→FCM pushes. */
+export async function diagnoseChatPush(): Promise<ChatPushDiagnosis> {
+  const isExpoGo = Constants.appOwnership === 'expo';
+  if (!canUsePush()) {
+    return {
+      permission: 'unknown',
+      hasNativeToken: false,
+      expoToken: null,
+      isExpoGo,
+      error: 'Push is only available on iOS/Android builds.',
+    };
+  }
+  if (isExpoGo) {
+    return {
+      permission: 'unknown',
+      hasNativeToken: false,
+      expoToken: null,
+      isExpoGo: true,
+      error: 'Expo Go cannot deliver closed-app chat push. Install the StudyBuddy APK.',
+    };
+  }
+
+  try {
+    await ensureNotificationChannels();
+    const current = await Notifications.getPermissionsAsync();
+    const permission =
+      current.status === 'granted' ||
+      current.status === 'denied' ||
+      current.status === 'undetermined'
+        ? current.status
+        : 'unknown';
+
+    if (permission !== 'granted') {
+      return {
+        permission,
+        hasNativeToken: false,
+        expoToken: null,
+        isExpoGo: false,
+        error: 'Notification permission is not granted.',
+      };
+    }
+
+    let hasNativeToken = false;
+    try {
+      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      const native = String(
+        typeof deviceToken === 'string'
+          ? deviceToken
+          : (deviceToken as { data?: string })?.data || '',
+      ).trim();
+      hasNativeToken = Boolean(native);
+    } catch (e) {
+      return {
+        permission,
+        hasNativeToken: false,
+        expoToken: null,
+        isExpoGo: false,
+        error:
+          e instanceof Error
+            ? `FCM device token failed: ${e.message}`
+            : 'FCM device token failed — google-services.json may be missing from this APK.',
+      };
+    }
+
+    const projectId = easProjectId();
+    if (!projectId) {
+      return {
+        permission,
+        hasNativeToken,
+        expoToken: null,
+        isExpoGo: false,
+        error: 'Missing EAS projectId.',
+      };
+    }
+
+    try {
+      const token = await Notifications.getExpoPushTokenAsync({ projectId });
+      const expoToken = String(token.data || '').trim() || null;
+      return {
+        permission,
+        hasNativeToken,
+        expoToken,
+        isExpoGo: false,
+        error: expoToken
+          ? null
+          : 'Could not obtain an Expo push token on this device.',
+      };
+    } catch (e) {
+      return {
+        permission,
+        hasNativeToken,
+        expoToken: null,
+        isExpoGo: false,
+        error:
+          e instanceof Error
+            ? `Expo push token failed: ${e.message}`
+            : 'Expo push token failed.',
+      };
+    }
+  } catch (e) {
+    return {
+      permission: 'unknown',
+      hasNativeToken: false,
+      expoToken: null,
+      isExpoGo: false,
+      error: e instanceof Error ? e.message : 'Push diagnosis failed.',
+    };
+  }
+}
+
+/**
+ * Send a remote Expo push to THIS device (verifies FCM credentials end-to-end).
+ * Use while signed in; then force-close and ask a classmate to message you.
+ */
+export async function sendSelfTestChatPush(): Promise<PushSendResult> {
+  const diagnosis = await diagnoseChatPush();
+  if (!diagnosis.expoToken) {
+    const deliveryError =
+      diagnosis.error || 'No Expo push token on this device.';
+    setLastPushDeliveryError(deliveryError);
+    return { badTokens: [], deliveryError, accepted: 0 };
+  }
+
+  // Persist token so classmate sends also reach this device.
+  try {
+    const { registerChatPushForCurrentUser } = await import('./chatApi');
+    await registerChatPushForCurrentUser();
+  } catch {
+    // still attempt the self-test send
+  }
+
+  return sendChatPushNotifications({
+    tokens: [diagnosis.expoToken],
+    title: 'StudyBuddy push test',
+    body: 'If you see this, Expo→FCM works. Force-close the app, then have a classmate message you.',
+    data: {
+      type: DATA_TYPE,
+      conversationId: 'push-self-test',
+      peerName: 'Push test',
+      peerEmail: '',
+      isGroup: false,
+    },
+  });
+}
+
 /** Register for remote push and return the Expo push token (or null). */
 export async function registerChatPushToken(): Promise<string | null> {
   if (!canUsePush()) return null;

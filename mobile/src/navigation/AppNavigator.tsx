@@ -70,6 +70,11 @@ function openDeadlinesFromNotification() {
 
 function openChatFromNotification(data: ChatNotificationData) {
   if (!navigationRef.isReady()) return;
+  // Self-test pushes are not real conversations.
+  if (data.conversationId === 'push-self-test') {
+    if (navigationRef.isReady()) navigationRef.navigate('Messages');
+    return;
+  }
   navigationRef.navigate('ChatThread', {
     conversationId: data.conversationId,
     peerName: data.peerName || 'Chat',

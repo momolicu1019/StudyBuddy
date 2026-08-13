@@ -40,12 +40,49 @@ import {
 } from './firebaseApp';
 
 const MAX_GROUP_MEMBERS = 20;
+/** Newest messages to keep in a live thread subscription (smaller = faster first paint). */
+const LIVE_MESSAGE_LIMIT = 100;
 
 export type ChatUser = {
   id: string;
   email: string;
   name: string;
 };
+
+type SessionCache = {
+  key: string;
+  localAuthId: string;
+  email: string;
+  name: string;
+  chatUser: ChatUser;
+};
+
+let sessionCache: SessionCache | null = null;
+let ensureInFlight: Promise<ChatUser> | null = null;
+let ensureInFlightKey: string | null = null;
+
+function sessionKey(localAuthId: string, email: string): string {
+  return `${localAuthId}:${normalizeEmail(email)}`;
+}
+
+/** Sync read of the last ensured chat user (null until ensureChatSession succeeds). */
+export function getCachedChatUser(): ChatUser | null {
+  const auth = isFirebaseConfigured() ? getFirebaseAuth() : null;
+  if (
+    !sessionCache ||
+    !auth?.currentUser ||
+    auth.currentUser.uid !== sessionCache.chatUser.id
+  ) {
+    return null;
+  }
+  return sessionCache.chatUser;
+}
+
+function clearSessionCache(): void {
+  sessionCache = null;
+  ensureInFlight = null;
+  ensureInFlightKey = null;
+}
 
 export type ChatConversation = {
   id: string;
@@ -184,6 +221,23 @@ async function ensureFirebaseUser(input: {
 }): Promise<User> {
   const auth = getFirebaseAuth();
   const email = normalizeEmail(input.email);
+
+  // Fast path: already signed in as this Study Buddy email — skip network sign-in.
+  const current = auth.currentUser;
+  if (current && !current.isAnonymous) {
+    const currentEmail = normalizeEmail(current.email || '');
+    if (currentEmail === email) {
+      if (input.name && current.displayName !== input.name) {
+        try {
+          await updateProfile(current, { displayName: input.name });
+        } catch {
+          // Non-fatal — messaging can continue with the previous display name.
+        }
+      }
+      return current;
+    }
+  }
+
   const password = await chatPasswordFor(input.localAuthId);
 
   // Prefer email/password so the same StudyBuddy account maps across devices.
@@ -261,10 +315,15 @@ async function upsertProfile(user: User, input: {
 }): Promise<ChatUser> {
   const db = getFirestoreDb();
   const email = normalizeEmail(input.email);
+  const name = input.name.trim() || email;
   const userRef = doc(db, 'chatUsers', user.uid);
   const emailRef = doc(db, 'chatEmails', email);
 
-  const existingEmail = await getDoc(emailRef);
+  const [existingEmail, existingUser] = await Promise.all([
+    getDoc(emailRef),
+    getDoc(userRef),
+  ]);
+
   if (existingEmail.exists()) {
     const ownerUid = String(existingEmail.data()?.uid || '');
     if (ownerUid && ownerUid !== user.uid) {
@@ -274,12 +333,32 @@ async function upsertProfile(user: User, input: {
     }
   }
 
+  const chatUser: ChatUser = {
+    id: user.uid,
+    email,
+    name,
+  };
+
+  // Skip write when profile docs already match — common after cold start when
+  // Firebase Auth restores the session but our in-memory cache is empty.
+  if (existingUser.exists() && existingEmail.exists()) {
+    const data = existingUser.data() as UserDoc;
+    if (
+      normalizeEmail(data.email || '') === email &&
+      (data.name || '').trim() === name &&
+      String(data.localAuthId || '') === input.localAuthId &&
+      String(existingEmail.data()?.uid || '') === user.uid
+    ) {
+      return chatUser;
+    }
+  }
+
   const batch = writeBatch(db);
   batch.set(
     userRef,
     {
       email,
-      name: input.name.trim() || email,
+      name,
       localAuthId: input.localAuthId,
       updatedAt: serverTimestamp(),
     },
@@ -288,15 +367,12 @@ async function upsertProfile(user: User, input: {
   batch.set(emailRef, { uid: user.uid, email }, { merge: true });
   await batch.commit();
 
-  return {
-    id: user.uid,
-    email,
-    name: input.name.trim() || email,
-  };
+  return chatUser;
 }
 
 export async function clearChatSession(): Promise<void> {
   if (!isFirebaseConfigured()) return;
+  clearSessionCache();
   try {
     const auth = getFirebaseAuth();
     const uid = auth.currentUser?.uid;
@@ -450,11 +526,70 @@ export async function ensureChatSession(user: {
   name: string;
   id: string;
 }): Promise<ChatUser> {
-  return upsertChatUser({
-    email: user.email,
-    name: user.name,
-    localAuthId: user.id,
+  const email = normalizeEmail(user.email);
+  const name = (user.name || '').trim() || email;
+  const key = sessionKey(user.id, email);
+
+  // Instant path: already ensured this Study Buddy identity and Firebase Auth matches.
+  const cached = getCachedChatUser();
+  if (
+    cached &&
+    sessionCache &&
+    sessionCache.key === key &&
+    sessionCache.localAuthId === user.id
+  ) {
+    if (sessionCache.name !== name) {
+      sessionCache = { ...sessionCache, name };
+      // Refresh display name / profile in the background — do not block inbox load.
+      void upsertChatUser({
+        email,
+        name,
+        localAuthId: user.id,
+      })
+        .then((chatUser) => {
+          sessionCache = {
+            key,
+            localAuthId: user.id,
+            email,
+            name,
+            chatUser,
+          };
+        })
+        .catch(() => {
+          // keep serving the cached session
+        });
+    }
+    return cached;
+  }
+
+  // Deduplicate concurrent ensures (BrandHeader + AppNavigator + Messages).
+  if (ensureInFlight && ensureInFlightKey === key) {
+    return ensureInFlight;
+  }
+
+  ensureInFlightKey = key;
+  ensureInFlight = (async () => {
+    const chatUser = await upsertChatUser({
+      email,
+      name,
+      localAuthId: user.id,
+    });
+    sessionCache = {
+      key,
+      localAuthId: user.id,
+      email,
+      name,
+      chatUser,
+    };
+    return chatUser;
+  })().finally(() => {
+    if (ensureInFlightKey === key) {
+      ensureInFlight = null;
+      ensureInFlightKey = null;
+    }
   });
+
+  return ensureInFlight;
 }
 
 export async function getMe(): Promise<ChatUser> {
@@ -1061,28 +1196,31 @@ export async function listMessages(
       throw new Error('Not a member of this conversation');
     }
 
-    const take = Math.min(Math.max(opts?.limit ?? 100, 1), 200);
+    const take = Math.min(Math.max(opts?.limit ?? LIVE_MESSAGE_LIMIT, 1), 200);
+    // Newest first from Firestore, then reverse for chronological UI order.
     const q = query(
       collection(db, 'chatConversations', conversationId, 'messages'),
-      orderBy('createdAt', 'asc'),
+      orderBy('createdAt', 'desc'),
       limit(take),
     );
     const snap = await getDocs(q);
-    let rows = snap.docs.map((d) => {
-      const data = d.data() as {
-        senderId: string;
-        body: string;
-        createdAt?: Timestamp;
-      };
-      return {
-        id: d.id,
-        conversation_id: conversationId,
-        sender_id: data.senderId,
-        sender_name: conv.members?.[data.senderId]?.name,
-        body: data.body,
-        created_at: tsToIso(data.createdAt) || new Date().toISOString(),
-      } satisfies ChatMessage;
-    });
+    let rows = snap.docs
+      .map((d) => {
+        const data = d.data() as {
+          senderId: string;
+          body: string;
+          createdAt?: Timestamp;
+        };
+        return {
+          id: d.id,
+          conversation_id: conversationId,
+          sender_id: data.senderId,
+          sender_name: conv.members?.[data.senderId]?.name,
+          body: data.body,
+          created_at: tsToIso(data.createdAt) || new Date().toISOString(),
+        } satisfies ChatMessage;
+      })
+      .reverse();
 
     if (opts?.afterId) {
       const idx = rows.findIndex((m) => m.id === opts.afterId);
@@ -1242,29 +1380,32 @@ export function subscribeMessages(
     },
   );
 
+  // Fetch the newest N messages (desc), reverse for chronological bubble order.
   const q = query(
     collection(db, 'chatConversations', conversationId, 'messages'),
-    orderBy('createdAt', 'asc'),
-    limit(200),
+    orderBy('createdAt', 'desc'),
+    limit(LIVE_MESSAGE_LIMIT),
   );
   const unsubMsgs = onSnapshot(
     q,
     (snap) => {
-      latestRows = snap.docs.map((d) => {
-        const data = d.data() as {
-          senderId: string;
-          body: string;
-          createdAt?: Timestamp;
-        };
-        return {
-          id: d.id,
-          conversation_id: conversationId,
-          sender_id: data.senderId,
-          sender_name: memberNames[data.senderId],
-          body: data.body,
-          created_at: tsToIso(data.createdAt) || new Date().toISOString(),
-        } satisfies ChatMessage;
-      });
+      latestRows = snap.docs
+        .map((d) => {
+          const data = d.data() as {
+            senderId: string;
+            body: string;
+            createdAt?: Timestamp;
+          };
+          return {
+            id: d.id,
+            conversation_id: conversationId,
+            sender_id: data.senderId,
+            sender_name: memberNames[data.senderId],
+            body: data.body,
+            created_at: tsToIso(data.createdAt) || new Date().toISOString(),
+          } satisfies ChatMessage;
+        })
+        .reverse();
       emit();
     },
     (err) => onError?.(mapChatError(err, 'Could not sync messages')),
@@ -1362,23 +1503,25 @@ export async function exportChatBackup(): Promise<ChatBackupPayload | null> {
       const msgSnap = await getDocs(
         query(
           collection(db, 'chatConversations', docSnap.id, 'messages'),
-          orderBy('createdAt', 'asc'),
+          orderBy('createdAt', 'desc'),
           limit(MAX_BACKUP_MESSAGES_PER_CONV),
         ),
       );
-      const messages: ChatBackupMessage[] = msgSnap.docs.map((m) => {
-        const row = m.data() as {
-          senderId: string;
-          body: string;
-          createdAt?: Timestamp;
-        };
-        return {
-          id: m.id,
-          senderId: row.senderId,
-          body: row.body,
-          createdAt: tsToIso(row.createdAt) || new Date().toISOString(),
-        };
-      });
+      const messages: ChatBackupMessage[] = msgSnap.docs
+        .map((m) => {
+          const row = m.data() as {
+            senderId: string;
+            body: string;
+            createdAt?: Timestamp;
+          };
+          return {
+            id: m.id,
+            senderId: row.senderId,
+            body: row.body,
+            createdAt: tsToIso(row.createdAt) || new Date().toISOString(),
+          };
+        })
+        .reverse();
 
       conversations.push({
         id: docSnap.id,

@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -54,6 +55,7 @@ export function MessagesScreen({ navigation }: Props) {
   const [friends, setFriends] = useState<ChatFriend[]>([]);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeMode, setComposeMode] = useState<ComposeMode>('dm');
+  const [friendsOpen, setFriendsOpen] = useState(false);
   const [peerEmail, setPeerEmail] = useState('');
   const [groupTitle, setGroupTitle] = useState('');
   const [groupEmails, setGroupEmails] = useState<string[]>([]);
@@ -197,6 +199,7 @@ export function MessagesScreen({ navigation }: Props) {
     setStarting(true);
     try {
       const conv = await openDm(email);
+      setFriendsOpen(false);
       closeCompose();
       openThread(navigation, conv);
     } catch (e) {
@@ -294,16 +297,91 @@ export function MessagesScreen({ navigation }: Props) {
         <View style={styles.toolbarActions}>
           <PrimaryButton
             label="New chat"
-            onPress={() => openCompose('dm')}
+            onPress={() => {
+              setFriendsOpen(false);
+              openCompose('dm');
+            }}
             style={styles.actionBtn}
           />
           <PrimaryButton
             label="New group"
             variant="secondary"
-            onPress={() => openCompose('group')}
+            onPress={() => {
+              setFriendsOpen(false);
+              openCompose('group');
+            }}
             style={styles.actionBtn}
           />
+          <Pressable
+            onPress={() => setFriendsOpen((open) => !open)}
+            style={({ pressed }) => [
+              styles.friendsDropdownBtn,
+              friendsOpen && styles.friendsDropdownBtnOpen,
+              pressed && { opacity: 0.85 },
+            ]}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: friendsOpen }}
+            accessibilityLabel="Friends"
+          >
+            <Ionicons
+              name="people-outline"
+              size={16}
+              color={colors.primary}
+            />
+            <Text style={styles.friendsDropdownBtnText}>Friends</Text>
+            <Ionicons
+              name={friendsOpen ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={colors.primary}
+            />
+          </Pressable>
         </View>
+        {friendsOpen ? (
+          <View style={styles.friendsDropdown}>
+            <Text style={styles.friendsDropdownHint}>
+              Emails from your past chats — tap to start a new message
+            </Text>
+            {friends.length === 0 ? (
+              <Text style={styles.friendsDropdownEmpty}>
+                No friends yet. Start a chat to add classmates here.
+              </Text>
+            ) : (
+              <ScrollView
+                style={styles.friendsDropdownList}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
+                {friends.map((friend) => (
+                  <Pressable
+                    key={friend.email}
+                    style={({ pressed }) => [
+                      styles.friendRow,
+                      pressed && { opacity: 0.85 },
+                    ]}
+                    onPress={() => void startChat(friend.email)}
+                    disabled={starting}
+                  >
+                    <View style={styles.friendRowAvatar}>
+                      <Ionicons
+                        name="person-outline"
+                        size={16}
+                        color={colors.primary}
+                      />
+                    </View>
+                    <Text style={styles.friendRowText} numberOfLines={1}>
+                      {friend.email}
+                    </Text>
+                    <Ionicons
+                      name="chatbubble-outline"
+                      size={16}
+                      color={colors.muted}
+                    />
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        ) : null}
       </View>
 
       <FlatList
@@ -313,38 +391,6 @@ export function MessagesScreen({ navigation }: Props) {
         onRefresh={onRefresh}
         contentContainerStyle={
           conversations.length === 0 ? styles.emptyList : styles.list
-        }
-        ListHeaderComponent={
-          friends.length > 0 ? (
-            <View style={styles.friendsSection}>
-              <Text style={styles.friendsTitle}>Friends</Text>
-              <Text style={styles.friendsHint}>
-                Emails from your past chats — tap to start a new message
-              </Text>
-              <View style={styles.friendsWrap}>
-                {friends.map((friend) => (
-                  <Pressable
-                    key={friend.email}
-                    style={({ pressed }) => [
-                      styles.friendChip,
-                      pressed && { opacity: 0.85 },
-                    ]}
-                    onPress={() => void startChat(friend.email)}
-                    disabled={starting}
-                  >
-                    <Ionicons
-                      name="person-outline"
-                      size={14}
-                      color={colors.primary}
-                    />
-                    <Text style={styles.friendChipText} numberOfLines={1}>
-                      {friend.email}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-          ) : null
         }
         ListEmptyComponent={
           <View style={styles.empty}>
@@ -634,46 +680,81 @@ const styles = StyleSheet.create({
   hint: { color: colors.muted, fontSize: 13 },
   toolbarActions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   actionBtn: { alignSelf: 'flex-start' },
+  friendsDropdownBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.primarySoft,
+  },
+  friendsDropdownBtnOpen: {
+    borderColor: colors.primary,
+  },
+  friendsDropdownBtnText: {
+    color: colors.primary,
+    fontWeight: '750' as unknown as '700',
+    fontSize: 15,
+  },
+  friendsDropdown: {
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 12,
+    backgroundColor: colors.bg,
+    overflow: 'hidden',
+  },
+  friendsDropdownHint: {
+    color: colors.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  friendsDropdownEmpty: {
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+  },
+  friendsDropdownList: {
+    maxHeight: 200,
+  },
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    backgroundColor: '#fff',
+  },
+  friendRowAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  friendRowText: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '600',
+  },
   list: { paddingVertical: 8 },
   emptyList: { flexGrow: 1, justifyContent: 'center' },
   empty: { alignItems: 'center', padding: 32, gap: 8 },
   emptyTitle: { fontSize: 17, fontWeight: '800', color: colors.ink },
   emptyBody: { textAlign: 'center', color: colors.muted, lineHeight: 20 },
-  friendsSection: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-    gap: 6,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.line,
-    marginBottom: 4,
-  },
-  friendsTitle: { fontSize: 15, fontWeight: '800', color: colors.ink },
-  friendsHint: { color: colors.muted, fontSize: 12, lineHeight: 17 },
-  friendsWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 6,
-    marginBottom: 4,
-  },
-  friendChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    maxWidth: '100%',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 12,
-    backgroundColor: colors.primarySoft,
-  },
-  friendChipText: {
-    color: colors.primary,
-    fontSize: 13,
-    fontWeight: '600',
-    maxWidth: 220,
-  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

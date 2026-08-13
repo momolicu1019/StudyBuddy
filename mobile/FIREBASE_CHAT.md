@@ -120,7 +120,8 @@ Local banners only work while the app process is alive. **Force-killed / swiped-
 2. On Messages, tap **Test push on this phone**
    - If that fails, the toast names the Expo/FCM problem
    - If that works, Expo→FCM is fine — swipe the app away from recents (**do not** use Android Settings → Force stop; that blocks FCM until the app is opened again)
-3. On the **recipient**, Firebase Console → Firestore → `chatUsers/{uid}` → `expoPushTokens` should be a non-empty list (`ExponentPushToken[...]`)
+3. On the **recipient**, Firebase Console → Firestore → `chatUsers/{uid}` → `expoPushTokens` must contain at least one `ExponentPushToken[...]`
+   - If the array is **empty**, closed-app classmate notifications cannot work (even if the phone briefly showed Ready). Re-open Messages / tap Test push after installing a build that persists the token without re-fetching FCM
 4. Send a chat from another account with the recipient swiped away — the **sender** shows a toast if Expo reports `InvalidCredentials`, missing token, etc.
 5. Manually test Expo delivery with the recipient token:
 

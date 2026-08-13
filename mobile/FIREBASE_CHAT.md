@@ -22,8 +22,6 @@ EXPO_PUBLIC_FIREBASE_CHAT_PEPPER=change-me-to-a-long-random-string
 
 4. Restart Expo: `npx expo start -c`
 
-You do **not** need `EXPO_PUBLIC_CHAT_API_URL` when using Firebase.
-
 ## 2. Enable Auth + Firestore
 
 1. **Build → Authentication → Sign-in method**

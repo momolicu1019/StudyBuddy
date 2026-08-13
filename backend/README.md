@@ -11,7 +11,7 @@ The mobile app is **local-first**. Core data lives on the device:
 | Quizzes | Quiz result history |
 | Settings | App preferences |
 
-This FastAPI project is the **optional cloud** layer for later:
+This FastAPI project is an **optional cloud** layer for later:
 
 | Cloud | Purpose |
 |---|---|
@@ -19,27 +19,10 @@ This FastAPI project is the **optional cloud** layer for later:
 | Account | Sign-in / profile |
 | Sync | Keep devices consistent |
 | Devices | Multi-device management |
-| **Chat (legacy)** | Optional FastAPI `/api/chat/*` on Neon Postgres |
 
-You do **not** need to run this server for normal study features. **Student chat in the mobile app now uses Firebase** (see `mobile/FIREBASE_CHAT.md`). The FastAPI chat routes below remain available if you still want a self-hosted API.
+You do **not** need to run this server for normal study features.
 
-### Student chat REST MVP (optional / legacy)
-
-1. Copy `.env.example` → `.env` and set:
-
-```bash
-DATABASE_URL=postgresql://USER:PASSWORD@HOST/neondb?sslmode=require
-CHAT_JWT_SECRET=a-long-random-secret
-```
-
-2. Install deps and run the API (tables are created automatically on startup):
-
-```bash
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Chat endpoints: `POST /api/chat/auth/upsert`, `POST /api/chat/dms`, `GET /api/chat/conversations`, `GET|POST /api/chat/conversations/{id}/messages`.
+**Student chat** is handled by **Firebase** in the mobile app (see `mobile/FIREBASE_CHAT.md`). This backend no longer serves chat.
 
 ## Run locally (optional)
 

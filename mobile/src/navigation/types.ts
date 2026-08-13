@@ -10,6 +10,12 @@ export type RootStackParamList = {
   Storage: undefined;
   Deadlines: undefined;
   Pomodoro: undefined;
+  Messages: undefined;
+  ChatThread: {
+    conversationId: string;
+    peerName: string;
+    peerEmail: string;
+  };
 };
 
 export type MainTabParamList = {

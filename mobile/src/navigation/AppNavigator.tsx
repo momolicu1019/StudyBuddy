@@ -25,10 +25,12 @@ import { useAuth, useAuthInitials } from '../context/AuthContext';
 import { AboutModal } from '../screens/AboutModal';
 import { AccountModal } from '../screens/AccountModal';
 import { AITutorScreen } from '../screens/AITutorScreen';
+import { ChatThreadScreen } from '../screens/ChatThreadScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { DeadlinesScreen } from '../screens/DeadlinesScreen';
 import { FlashcardsScreen } from '../screens/FlashcardsScreen';
 import { LoginScreen } from '../screens/LoginScreen';
+import { MessagesScreen } from '../screens/MessagesScreen';
 import { PomodoroScreen } from '../screens/PomodoroScreen';
 import { ProgressScreen } from '../screens/ProgressScreen';
 import { QuizScreen } from '../screens/QuizScreen';
@@ -100,9 +102,21 @@ function BrandHeader() {
           </View>
           <Text style={styles.brandText}>Study Buddy AI</Text>
         </Pressable>
-        <Pressable style={styles.avatar} onPress={() => setAccountOpen(true)}>
-          <Text style={styles.avatarText}>{initials}</Text>
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable
+            style={styles.chatBtn}
+            onPress={() => {
+              if (navigationRef.isReady()) navigationRef.navigate('Messages');
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Messages"
+          >
+            <Ionicons name="chatbubbles-outline" size={22} color={colors.primary} />
+          </Pressable>
+          <Pressable style={styles.avatar} onPress={() => setAccountOpen(true)}>
+            <Text style={styles.avatarText}>{initials}</Text>
+          </Pressable>
+        </View>
       </View>
       <AccountModal visible={accountOpen} onClose={() => setAccountOpen(false)} />
       <AboutModal visible={aboutOpen} onClose={() => setAboutOpen(false)} />
@@ -317,6 +331,18 @@ export function AppNavigator() {
                 component={PomodoroScreen}
                 options={{ title: 'Pomodoro' }}
               />
+              <Stack.Screen
+                name="Messages"
+                component={MessagesScreen}
+                options={{ title: 'Messages' }}
+              />
+              <Stack.Screen
+                name="ChatThread"
+                component={ChatThreadScreen}
+                options={({ route }) => ({
+                  title: route.params.peerName || 'Chat',
+                })}
+              />
             </>
           )}
         </Stack.Navigator>
@@ -355,6 +381,15 @@ const styles = StyleSheet.create({
   },
   logoText: { color: '#fff', fontSize: 18, fontWeight: '800' },
   brandText: { fontSize: 18, fontWeight: '800', color: colors.ink },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  chatBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   avatar: {
     width: 40,
     height: 40,

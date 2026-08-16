@@ -11,8 +11,8 @@ type Props = {
 };
 
 const FALLBACK_APP_NAME = 'StudyBuddy';
-const FALLBACK_VERSION = '1.0.1';
-const DEVELOPER = 'Nino Jeffrey Montillano';
+const FALLBACK_VERSION = '1.0.2';
+const DEVELOPER = 'SoloLevelDevPH';
 const RIGHTS_DATE = '08/2026';
 
 export function AboutModal({ visible, onClose }: Props) {

@@ -11,7 +11,7 @@ type Props = {
 };
 
 const FALLBACK_APP_NAME = 'StudyBuddy';
-const FALLBACK_VERSION = '1.0.3';
+const FALLBACK_VERSION = '1.0.4';
 const DEVELOPER = 'SoloLevelDevPH';
 const RIGHTS_DATE = '08/2026';
 
